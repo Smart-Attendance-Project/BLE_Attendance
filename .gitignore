@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+
+# Local environment files
+.env
+backend/.env
+
+# Databases and runtime artifacts
+*.db
+*.sqlite3
+
+# Flutter / Dart
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.packages
+**/build/
+
+# Android / Gradle
+**/.gradle/
+**/local.properties
+
+# IDE
+.idea/
+.vscode/
+*.iml
