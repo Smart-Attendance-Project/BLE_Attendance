@@ -12,6 +12,10 @@ import 'package:permission_handler/permission_handler.dart';
 const String kAdvertiseServiceUuid = '0000180D-0000-1000-8000-00805F9B34FB';
 const int kRssiThreshold = -80;
 const Duration kDetectionPostInterval = Duration(seconds: 10);
+const String kDefaultApiBaseUrl = String.fromEnvironment(
+  'API_BASE_URL',
+  defaultValue: 'http://10.0.2.2:8000',
+);
 
 void main() {
   runApp(const BleAttendanceApp());
@@ -46,17 +50,37 @@ class _LoginPageState extends State<LoginPage> {
   final _identifierCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   final _nameCtrl = TextEditingController();
+  final _serverUrlCtrl = TextEditingController();
   AppRole _role = AppRole.student;
   bool _isRegister = false;
   bool _loading = false;
+  bool _ready = false;
 
   final _api = ApiClient();
+
+  @override
+  void initState() {
+    super.initState();
+    _bootstrap();
+  }
+
+  Future<void> _bootstrap() async {
+    await _api.init();
+    _serverUrlCtrl.text = _api.baseUrl;
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _ready = true;
+    });
+  }
 
   @override
   void dispose() {
     _identifierCtrl.dispose();
     _passwordCtrl.dispose();
     _nameCtrl.dispose();
+    _serverUrlCtrl.dispose();
     super.dispose();
   }
 
@@ -66,6 +90,8 @@ class _LoginPageState extends State<LoginPage> {
     });
 
     try {
+      await _api.setBaseUrl(_serverUrlCtrl.text);
+
       if (_isRegister) {
         await _api.register(
           fullName: _nameCtrl.text.trim(),
@@ -94,6 +120,35 @@ class _LoginPageState extends State<LoginPage> {
           MaterialPageRoute(builder: (_) => StudentPage(api: _api)),
         );
       }
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_friendlyError(error))),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _testConnection() async {
+    setState(() {
+      _loading = true;
+    });
+    try {
+      await _api.setBaseUrl(_serverUrlCtrl.text);
+      await _api.healthCheck();
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Server connection successful.')),
+      );
     } catch (error) {
       if (!mounted) {
         return;
@@ -151,10 +206,25 @@ class _LoginPageState extends State<LoginPage> {
               decoration: const InputDecoration(labelText: 'Password'),
               obscureText: true,
             ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _serverUrlCtrl,
+              keyboardType: TextInputType.url,
+              decoration: const InputDecoration(
+                labelText: 'Server URL',
+                hintText: 'http://192.168.1.10:8000',
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text('For real phones use http://<laptop-ip>:8000'),
             const SizedBox(height: 16),
             FilledButton(
-              onPressed: _loading ? null : _submit,
+              onPressed: _loading || !_ready ? null : _submit,
               child: Text(_loading ? 'Please wait...' : (_isRegister ? 'Register and Login' : 'Login')),
+            ),
+            OutlinedButton(
+              onPressed: _loading || !_ready ? null : _testConnection,
+              child: const Text('Test Connection'),
             ),
             TextButton(
               onPressed: _loading
@@ -575,13 +645,36 @@ class ApiClient {
 
   final Dio _dio = Dio(
     BaseOptions(
-      baseUrl: const String.fromEnvironment('API_BASE_URL', defaultValue: 'http://10.0.2.2:8000'),
+      baseUrl: kDefaultApiBaseUrl,
       connectTimeout: const Duration(seconds: 8),
       receiveTimeout: const Duration(seconds: 8),
     ),
   );
 
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
+  String _baseUrl = kDefaultApiBaseUrl;
+
+  String get baseUrl => _baseUrl;
+
+  Future<void> init() async {
+    final saved = await _storage.read(key: 'api_base_url');
+    if (saved != null && saved.trim().isNotEmpty) {
+      final normalized = _normalizeBaseUrl(saved);
+      _baseUrl = normalized;
+      _dio.options.baseUrl = normalized;
+    }
+  }
+
+  Future<void> setBaseUrl(String input) async {
+    final normalized = _normalizeBaseUrl(input);
+    _baseUrl = normalized;
+    _dio.options.baseUrl = normalized;
+    await _storage.write(key: 'api_base_url', value: normalized);
+  }
+
+  Future<void> healthCheck() async {
+    await _dio.get('/health');
+  }
 
   Future<void> saveToken(String token) async {
     await _storage.write(key: 'token', value: token);
@@ -702,10 +795,33 @@ String _friendlyError(Object error) {
   if (error is DioException) {
     final status = error.response?.statusCode;
     final data = error.response?.data;
+    if (error.type == DioExceptionType.connectionTimeout ||
+        error.type == DioExceptionType.receiveTimeout ||
+        error.type == DioExceptionType.connectionError) {
+      return 'Cannot reach server. Check Server URL and Wi-Fi.';
+    }
     if (data is Map && data['detail'] != null) {
       return '${data['detail']} (HTTP ${status ?? '-'})';
     }
     return 'Network/API error (HTTP ${status ?? '-'})';
   }
   return error.toString();
+}
+
+String _normalizeBaseUrl(String input) {
+  final raw = input.trim();
+  if (raw.isEmpty) {
+    throw Exception('Server URL is required.');
+  }
+
+  final withScheme = raw.startsWith('http://') || raw.startsWith('https://')
+      ? raw
+      : 'http://$raw';
+
+  final uri = Uri.tryParse(withScheme);
+  if (uri == null || uri.host.isEmpty) {
+    throw Exception('Enter a valid server URL.');
+  }
+
+  return withScheme.endsWith('/') ? withScheme.substring(0, withScheme.length - 1) : withScheme;
 }
