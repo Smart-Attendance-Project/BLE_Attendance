@@ -567,6 +567,7 @@ class _StudentPageState extends State<StudentPage> {
   final LocalAuthentication _localAuth = LocalAuthentication();
 
   StreamSubscription<DiscoveredDevice>? _scanSub;
+  StreamSubscription<BleStatus>? _bleStatusSub;
   String? _sessionId;
   int? _latestRssi;
   bool? _proximityOk;
@@ -575,19 +576,49 @@ class _StudentPageState extends State<StudentPage> {
   bool _blePermissionsGranted = true;
   String? _scanError;
   Timer? _scanRetryTimer;
+  BleStatus _bleStatus = BleStatus.unknown;
   DateTime _lastSentAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   @override
   void initState() {
     super.initState();
+    _watchBleStatus();
     _bootstrap();
   }
 
   @override
   void dispose() {
     _scanSub?.cancel();
+    _bleStatusSub?.cancel();
     _scanRetryTimer?.cancel();
     super.dispose();
+  }
+
+  void _watchBleStatus() {
+    _bleStatusSub = _ble.statusStream.listen((status) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _bleStatus = status;
+      });
+
+      if (status == BleStatus.ready &&
+          _blePermissionsGranted &&
+          !_scanning &&
+          _sessionId != null) {
+        _startScan();
+        return;
+      }
+
+      if (status != BleStatus.ready && _scanning) {
+        _scanSub?.cancel();
+        setState(() {
+          _scanning = false;
+          _scanError = 'Bluetooth state is $status';
+        });
+      }
+    });
   }
 
   Future<void> _bootstrap() async {
@@ -634,6 +665,16 @@ class _StudentPageState extends State<StudentPage> {
     if (_scanning) {
       return;
     }
+    if (_bleStatus != BleStatus.ready) {
+      if (mounted) {
+        setState(() {
+          _scanning = false;
+          _scanError = 'Bluetooth not ready: $_bleStatus';
+        });
+      }
+      _scheduleScanRetry();
+      return;
+    }
     _scanRetryTimer?.cancel();
     await _scanSub?.cancel();
     setState(() {
@@ -642,7 +683,11 @@ class _StudentPageState extends State<StudentPage> {
     });
 
     _scanSub = _ble
-        .scanForDevices(withServices: const [], scanMode: ScanMode.lowLatency)
+        .scanForDevices(
+          withServices: const [],
+          scanMode: ScanMode.lowLatency,
+          requireLocationServicesEnabled: false,
+        )
         .listen(
           (device) async {
             final sessionId = _sessionId;
@@ -675,7 +720,7 @@ class _StudentPageState extends State<StudentPage> {
             if (mounted) {
               setState(() {
                 _scanning = false;
-                _scanError = 'Scan stopped. Retrying...';
+                _scanError = 'Scan error: $error';
               });
               _scheduleScanRetry();
             }
@@ -695,7 +740,10 @@ class _StudentPageState extends State<StudentPage> {
   void _scheduleScanRetry() {
     _scanRetryTimer?.cancel();
     _scanRetryTimer = Timer(const Duration(seconds: 2), () async {
-      if (!mounted || !_blePermissionsGranted || _scanning) {
+      if (!mounted ||
+          !_blePermissionsGranted ||
+          _scanning ||
+          _sessionId == null) {
         return;
       }
       await _startScan();
@@ -790,6 +838,7 @@ class _StudentPageState extends State<StudentPage> {
             const SizedBox(height: 8),
             Text('Latest RSSI: ${_latestRssi ?? '-'}'),
             Text('Scanning: ${_scanning ? 'ON' : 'OFF'}'),
+            Text('Bluetooth: $_bleStatus'),
             if (_scanError != null) Text('Scan status: $_scanError'),
             if (!_blePermissionsGranted)
               const Text('Scanning blocked: enable Nearby devices permission.'),
