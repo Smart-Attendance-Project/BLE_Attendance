@@ -14,7 +14,7 @@ const int kRssiThreshold = -80;
 const Duration kDetectionPostInterval = Duration(seconds: 10);
 const String kDefaultApiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
-  defaultValue: 'http://10.0.2.2:8000',
+  defaultValue: 'http://192.168.1.7:8000',
 );
 
 void main() {
@@ -776,18 +776,20 @@ class ApiClient {
 }
 
 Future<bool> _ensureBlePermissions() async {
-  final statuses = await [
+  final bleStatuses = await [
     Permission.bluetoothScan,
     Permission.bluetoothConnect,
     Permission.bluetoothAdvertise,
-    Permission.locationWhenInUse,
   ].request();
 
-  for (final status in statuses.values) {
+  for (final status in bleStatuses.values) {
     if (!status.isGranted && !status.isLimited) {
       return false;
     }
   }
+
+  await Permission.locationWhenInUse.request();
+
   return true;
 }
 
