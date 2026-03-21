@@ -3,6 +3,7 @@ from datetime import datetime
 import re
 
 from fastapi import Depends, FastAPI, HTTPException
+from sqlalchemy import inspect, text
 from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -33,6 +34,12 @@ STUDENT_ID_PATTERN = re.compile(r"^(?:\d{2}[A-Z]{2,3}\d{3}|D\d{2}[A-Z]{2,3}\d{3}
 @app.on_event("startup")
 def on_startup() -> None:
     Base.metadata.create_all(bind=engine)
+    inspector = inspect(engine)
+    if "sessions" in inspector.get_table_names():
+        columns = {col["name"] for col in inspector.get_columns("sessions")}
+        if "finalization_open" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN finalization_open BOOLEAN DEFAULT FALSE"))
 
 
 @app.get("/health")
@@ -120,6 +127,7 @@ def start_session(
         starts_at=session.starts_at,
         ends_at=session.ends_at,
         is_active=session.is_active,
+        finalization_open=session.finalization_open,
     )
 
 
@@ -133,6 +141,7 @@ def end_session(
     if session is None or session.teacher_user_id != teacher.id:
         raise HTTPException(status_code=404, detail="Session not found")
     session.is_active = False
+    session.finalization_open = False
     session.ends_at = datetime.utcnow()
     db.commit()
     db.refresh(session)
@@ -144,6 +153,7 @@ def end_session(
         starts_at=session.starts_at,
         ends_at=session.ends_at,
         is_active=session.is_active,
+        finalization_open=session.finalization_open,
     )
 
 
@@ -160,6 +170,35 @@ def get_active_session(db: Session = Depends(get_db), _: User = Depends(get_curr
         starts_at=session.starts_at,
         ends_at=session.ends_at,
         is_active=session.is_active,
+        finalization_open=session.finalization_open,
+    )
+
+
+@app.post("/teacher/sessions/{session_id}/open-finalization", response_model=SessionOut)
+def open_finalization(
+    session_id: str,
+    db: Session = Depends(get_db),
+    teacher: User = Depends(require_role(UserRole.teacher)),
+) -> SessionOut:
+    session = db.get(LectureSession, session_id)
+    if session is None or session.teacher_user_id != teacher.id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not session.is_active:
+        raise HTTPException(status_code=409, detail="Session is already ended")
+
+    session.finalization_open = True
+    db.commit()
+    db.refresh(session)
+
+    return SessionOut(
+        id=session.id,
+        subject=session.subject,
+        token=session.token,
+        teacher_user_id=session.teacher_user_id,
+        starts_at=session.starts_at,
+        ends_at=session.ends_at,
+        is_active=session.is_active,
+        finalization_open=session.finalization_open,
     )
 
 
@@ -193,6 +232,8 @@ def finalize_attendance(
     session = db.get(LectureSession, payload.session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
+    if not session.finalization_open:
+        raise HTTPException(status_code=409, detail="Teacher has not opened finalization yet")
 
     attendance = upsert_attendance(
         db=db,

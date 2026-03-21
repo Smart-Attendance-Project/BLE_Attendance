@@ -42,6 +42,7 @@ class SessionOut(BaseModel):
     starts_at: datetime
     ends_at: datetime | None
     is_active: bool
+    finalization_open: bool
 
 
 class DetectionIn(BaseModel):

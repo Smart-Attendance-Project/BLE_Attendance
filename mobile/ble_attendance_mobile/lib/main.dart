@@ -10,7 +10,7 @@ import 'package:local_auth/local_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 const String kAdvertiseServiceUuid = '0000180D-0000-1000-8000-00805F9B34FB';
-const int kRssiThreshold = -80;
+const int kRssiThreshold = -92;
 const Duration kDetectionPostInterval = Duration(seconds: 10);
 const String kDefaultApiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
@@ -262,6 +262,7 @@ class _TeacherPageState extends State<TeacherPage> {
   String? _token;
   bool _loading = false;
   bool _isAdvertising = false;
+  bool _finalizationOpen = false;
   List<Map<String, dynamic>> _detections = const [];
   Map<String, dynamic>? _summary;
 
@@ -283,7 +284,7 @@ class _TeacherPageState extends State<TeacherPage> {
       _loading = true;
     });
     try {
-      final permsOk = await _ensureBlePermissions();
+      final permsOk = await _ensureBleAdvertisePermissions();
       if (!permsOk) {
         throw Exception('Bluetooth permissions are required.');
       }
@@ -291,6 +292,7 @@ class _TeacherPageState extends State<TeacherPage> {
       final session = await widget.api.startSession(_subjectCtrl.text.trim());
       _sessionId = session['id'] as String;
       _token = session['token'] as String;
+      _finalizationOpen = (session['finalization_open'] as bool?) ?? false;
 
       final data = AdvertiseData(
         serviceUuid: kAdvertiseServiceUuid,
@@ -346,6 +348,7 @@ class _TeacherPageState extends State<TeacherPage> {
         setState(() {
           _sessionId = null;
           _token = null;
+          _finalizationOpen = false;
         });
       }
     } catch (error) {
@@ -401,8 +404,42 @@ class _TeacherPageState extends State<TeacherPage> {
       setState(() {
         _sessionId = session['id'] as String;
         _token = session['token'] as String;
+        _finalizationOpen = (session['finalization_open'] as bool?) ?? false;
       });
     } catch (_) {}
+  }
+
+  Future<void> _openFinalization() async {
+    final sessionId = _sessionId;
+    if (sessionId == null) {
+      return;
+    }
+    setState(() {
+      _loading = true;
+    });
+    try {
+      final session = await widget.api.openFinalization(sessionId);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _finalizationOpen = (session['finalization_open'] as bool?) ?? true;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Finalization opened for students.')),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_friendlyError(error))));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+        });
+      }
+    }
   }
 
   @override
@@ -427,6 +464,11 @@ class _TeacherPageState extends State<TeacherPage> {
             FilledButton.tonal(
               onPressed: _loading ? null : _endSession,
               child: const Text('End Session'),
+            ),
+            const SizedBox(height: 8),
+            FilledButton.tonal(
+              onPressed: _loading || _sessionId == null || _finalizationOpen ? null : _openFinalization,
+              child: const Text('Open Finalization for Students'),
             ),
             const SizedBox(height: 8),
             Row(
@@ -455,6 +497,7 @@ class _TeacherPageState extends State<TeacherPage> {
             Text('Session ID: ${_sessionId ?? '-'}'),
             Text('Token: ${_token ?? '-'}'),
             Text('BLE Advertising: ${_isAdvertising ? 'ON' : 'OFF'}'),
+            Text('Finalization: ${_finalizationOpen ? 'OPEN' : 'CLOSED'}'),
             if (_summary != null)
               Text(
                 'Present: ${_summary!['present_students']}/${_summary!['total_students']}',
@@ -500,8 +543,10 @@ class _StudentPageState extends State<StudentPage> {
   StreamSubscription<DiscoveredDevice>? _scanSub;
   String? _sessionId;
   int? _latestRssi;
-  bool _proximityOk = false;
+  bool? _proximityOk;
   bool _scanning = false;
+  bool _finalizationOpen = false;
+  bool _blePermissionsGranted = true;
   DateTime _lastSentAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   @override
@@ -517,7 +562,18 @@ class _StudentPageState extends State<StudentPage> {
   }
 
   Future<void> _bootstrap() async {
-    await _ensureBlePermissions();
+    final permsOk = await _ensureBleScanPermissions();
+    if (!permsOk) {
+      if (mounted) {
+        setState(() {
+          _blePermissionsGranted = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Bluetooth permissions are required for scanning.')),
+        );
+      }
+      return;
+    }
     await _loadActiveSession();
     await _startScan();
   }
@@ -530,6 +586,8 @@ class _StudentPageState extends State<StudentPage> {
       }
       setState(() {
         _sessionId = session['id'] as String;
+        _finalizationOpen = (session['finalization_open'] as bool?) ?? false;
+        _blePermissionsGranted = true;
       });
     } catch (_) {
       if (mounted) {
@@ -550,7 +608,7 @@ class _StudentPageState extends State<StudentPage> {
 
     _scanSub = _ble
         .scanForDevices(
-          withServices: [Uuid.parse(kAdvertiseServiceUuid)],
+          withServices: const [],
           scanMode: ScanMode.lowLatency,
         )
         .listen((device) async {
@@ -593,6 +651,12 @@ class _StudentPageState extends State<StudentPage> {
     if (sessionId == null) {
       return;
     }
+    if (!_finalizationOpen) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Teacher has not opened finalization yet.')),
+      );
+      return;
+    }
 
     try {
       final canAuth = await _localAuth.canCheckBiometrics || await _localAuth.isDeviceSupported();
@@ -630,7 +694,12 @@ class _StudentPageState extends State<StudentPage> {
 
   @override
   Widget build(BuildContext context) {
-    final statusColor = _proximityOk ? Colors.green : Colors.red;
+    final statusColor = _proximityOk == null
+        ? Colors.grey
+        : (_proximityOk! ? Colors.green : Colors.red);
+    final statusText = _proximityOk == null
+        ? 'Searching...'
+        : (_proximityOk! ? 'In range' : 'Out of range');
     return Scaffold(
       appBar: AppBar(title: const Text('Student Dashboard')),
       body: Padding(
@@ -651,20 +720,45 @@ class _StudentPageState extends State<StudentPage> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                Text(_proximityOk ? 'In range' : 'Out of range'),
+                Text(statusText),
               ],
             ),
             const SizedBox(height: 8),
             Text('Latest RSSI: ${_latestRssi ?? '-'}'),
             Text('Scanning: ${_scanning ? 'ON' : 'OFF'}'),
+            if (!_blePermissionsGranted)
+              const Text('Scanning blocked: enable Nearby devices permission.'),
+            Text('Finalization: ${_finalizationOpen ? 'OPEN' : 'WAITING FOR TEACHER'}'),
             const SizedBox(height: 16),
             FilledButton(
-              onPressed: _finalizeWithBiometric,
+              onPressed: _finalizationOpen ? _finalizeWithBiometric : null,
               child: const Text('Finalize Attendance (Biometric)'),
             ),
             const SizedBox(height: 8),
             OutlinedButton(
-              onPressed: _loadActiveSession,
+              onPressed: () async {
+                final permsOk = await _ensureBleScanPermissions();
+                if (!mounted) {
+                  return;
+                }
+                if (!permsOk) {
+                  setState(() {
+                    _blePermissionsGranted = false;
+                  });
+                  if (!context.mounted) {
+                    return;
+                  }
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Grant Nearby devices permission and retry.')),
+                  );
+                  return;
+                }
+                setState(() {
+                  _blePermissionsGranted = true;
+                });
+                await _loadActiveSession();
+                await _startScan();
+              },
               child: const Text('Refresh Active Session'),
             ),
           ],
@@ -807,9 +901,13 @@ class ApiClient {
   Future<Map<String, dynamic>> getAttendanceSummary(String sessionId) {
     return _authedGet('/teacher/sessions/$sessionId/attendance-summary');
   }
+
+  Future<Map<String, dynamic>> openFinalization(String sessionId) {
+    return _authedPost('/teacher/sessions/$sessionId/open-finalization', {});
+  }
 }
 
-Future<bool> _ensureBlePermissions() async {
+Future<bool> _ensureBleAdvertisePermissions() async {
   final bleStatuses = await [
     Permission.bluetoothScan,
     Permission.bluetoothConnect,
@@ -824,6 +922,22 @@ Future<bool> _ensureBlePermissions() async {
 
   await Permission.locationWhenInUse.request();
 
+  return true;
+}
+
+Future<bool> _ensureBleScanPermissions() async {
+  final bleStatuses = await [
+    Permission.bluetoothScan,
+    Permission.bluetoothConnect,
+  ].request();
+
+  for (final status in bleStatuses.values) {
+    if (!status.isGranted && !status.isLimited) {
+      return false;
+    }
+  }
+
+  await Permission.locationWhenInUse.request();
   return true;
 }
 

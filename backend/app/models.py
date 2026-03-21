@@ -45,6 +45,7 @@ class Session(Base):
     starts_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     ends_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    finalization_open: Mapped[bool] = mapped_column(Boolean, default=False)
 
     detections: Mapped[list["Detection"]] = relationship(back_populates="session")
 
