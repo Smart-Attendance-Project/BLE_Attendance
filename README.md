@@ -71,17 +71,25 @@ flutter run --dart-define=API_BASE_URL=http://<your-laptop-ip>:8000
 
 ## Build APK (smaller ARM only)
 
-Build split debug APKs only for `armeabi-v7a` and `arm64-v8a`:
+Build split release APKs for `armeabi-v7a` and `arm64-v8a`:
 
 ```bash
 cd mobile/ble_attendance_mobile
-flutter build apk --debug --split-per-abi --target-platform android-arm,android-arm64
+flutter build apk --release --split-per-abi --target-platform android-arm,android-arm64
 ```
 
-Output files:
+Package them with app name + version iteration in filename:
 
-- `mobile/ble_attendance_mobile/build/app/outputs/flutter-apk/app-armeabi-v7a-debug.apk`
-- `mobile/ble_attendance_mobile/build/app/outputs/flutter-apk/app-arm64-v8a-debug.apk`
+```bash
+./scripts/package_release_apks.sh v0.1.3
+```
+
+Output files (raw + packaged):
+
+- `mobile/ble_attendance_mobile/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk`
+- `mobile/ble_attendance_mobile/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk`
+- `mobile/ble_attendance_mobile/build/app/outputs/flutter-apk/BLE_Attendance_v0.1.3_armeabi-v7a_release.apk`
+- `mobile/ble_attendance_mobile/build/app/outputs/flutter-apk/BLE_Attendance_v0.1.3_arm64-v8a_release.apk`
 
 ## Local build prerequisites (Linux)
 
@@ -92,7 +100,7 @@ Output files:
 
 ## Built APK
 
-Release assets currently publish debug APKs for ARM only:
+Release assets currently publish release APKs for ARM only:
 
-- `app-armeabi-v7a-debug.apk`
-- `app-arm64-v8a-debug.apk`
+- `app-armeabi-v7a-release.apk`
+- `app-arm64-v8a-release.apk`
