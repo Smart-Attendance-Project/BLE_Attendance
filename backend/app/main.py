@@ -1,8 +1,10 @@
+import io
 import secrets
 from datetime import datetime
 import re
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import inspect, text
 from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.orm import Session
@@ -13,6 +15,7 @@ from app.models import Attendance, Detection, Session as LectureSession, User, U
 from app.schemas import (
     AttendanceOverrideIn,
     AttendanceStudentSummary,
+    BatchDetectionIn,
     SessionAttendanceSummary,
     AttendanceFinalizeIn,
     AttendanceOut,
@@ -223,6 +226,36 @@ def submit_detection(
     return {"message": "Detection recorded"}
 
 
+@app.post("/detections/batch")
+def submit_detection_batch(
+    payload: BatchDetectionIn,
+    db: Session = Depends(get_db),
+    teacher: User = Depends(require_role(UserRole.teacher)),
+) -> dict[str, str]:
+    """Teacher batch-posts detections on behalf of students (identified by student ID)."""
+    recorded = 0
+    for item in payload.detections:
+        session = db.get(LectureSession, item.session_id)
+        if session is None or not session.is_active or session.teacher_user_id != teacher.id:
+            continue
+
+        student = db.scalar(select(User).where(User.student_id == item.student_identifier))
+        if student is None:
+            continue
+
+        detection = Detection(
+            session_id=item.session_id,
+            student_user_id=student.id,
+            rssi=item.rssi,
+            proximity_ok=item.proximity_ok,
+        )
+        db.add(detection)
+        recorded += 1
+
+    db.commit()
+    return {"message": f"{recorded} detections recorded"}
+
+
 @app.post("/attendance/finalize", response_model=AttendanceOut)
 def finalize_attendance(
     payload: AttendanceFinalizeIn,
@@ -391,3 +424,102 @@ def get_session_detections(
             }
         )
     return output
+
+
+@app.get("/teacher/sessions/{session_id}/attendance-export")
+def export_attendance_excel(
+    session_id: str,
+    db: Session = Depends(get_db),
+    teacher: User = Depends(require_role(UserRole.teacher)),
+):
+    """Generate and return an Excel attendance report for a session."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    session = db.get(LectureSession, session_id)
+    if session is None or session.teacher_user_id != teacher.id:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Reuse the attendance summary logic
+    summary = get_attendance_summary(session_id, db, teacher)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Attendance"
+
+    # Header styles
+    header_font = Font(bold=True, color="FFFFFF", size=12)
+    header_fill = PatternFill(start_color="0B6E4F", end_color="0B6E4F", fill_type="solid")
+    thin_border = Border(
+        left=Side(style="thin"),
+        right=Side(style="thin"),
+        top=Side(style="thin"),
+        bottom=Side(style="thin"),
+    )
+
+    # Title row
+    ws.merge_cells("A1:G1")
+    title_cell = ws["A1"]
+    title_cell.value = f"Attendance Report — {session.subject}"
+    title_cell.font = Font(bold=True, size=14)
+    title_cell.alignment = Alignment(horizontal="center")
+
+    ws.merge_cells("A2:G2")
+    meta_cell = ws["A2"]
+    starts = session.starts_at.strftime("%Y-%m-%d %H:%M") if session.starts_at else "-"
+    ends = session.ends_at.strftime("%H:%M") if session.ends_at else "ongoing"
+    meta_cell.value = f"Date: {starts} — {ends}  |  Present: {summary.present_students}/{summary.total_students}"
+    meta_cell.alignment = Alignment(horizontal="center")
+
+    # Column headers
+    headers = ["Sr.", "Student ID", "Student Name", "Detections", "Presence %", "Present", "Biometric", "Override"]
+    for col_idx, header in enumerate(headers, 1):
+        cell = ws.cell(row=4, column=col_idx, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = thin_border
+
+    # Data rows
+    present_fill = PatternFill(start_color="D4EDDA", end_color="D4EDDA", fill_type="solid")
+    absent_fill = PatternFill(start_color="F8D7DA", end_color="F8D7DA", fill_type="solid")
+
+    for row_idx, record in enumerate(summary.records, 5):
+        fill = present_fill if record.is_present else absent_fill
+        data = [
+            row_idx - 4,
+            record.student_id or "-",
+            record.student_name,
+            record.detection_count,
+            f"{record.presence_ratio * 100:.0f}%",
+            "✓" if record.is_present else "✗",
+            "✓" if record.biometric_verified else "✗",
+            record.override_reason or "-",
+        ]
+        for col_idx, value in enumerate(data, 1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.border = thin_border
+            cell.alignment = Alignment(horizontal="center")
+            cell.fill = fill
+
+    # Column widths
+    ws.column_dimensions["A"].width = 5
+    ws.column_dimensions["B"].width = 14
+    ws.column_dimensions["C"].width = 24
+    ws.column_dimensions["D"].width = 12
+    ws.column_dimensions["E"].width = 12
+    ws.column_dimensions["F"].width = 10
+    ws.column_dimensions["G"].width = 10
+    ws.column_dimensions["H"].width = 20
+
+    # Write to bytes
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    filename = f"attendance_{session.subject}_{starts}.xlsx".replace(" ", "_")
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

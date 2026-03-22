@@ -51,6 +51,17 @@ class DetectionIn(BaseModel):
     proximity_ok: bool = True
 
 
+class BatchDetectionItem(BaseModel):
+    session_id: str
+    student_identifier: str
+    rssi: int
+    proximity_ok: bool = True
+
+
+class BatchDetectionIn(BaseModel):
+    detections: list[BatchDetectionItem]
+
+
 class AttendanceFinalizeIn(BaseModel):
     session_id: str
     biometric_verified: bool = True

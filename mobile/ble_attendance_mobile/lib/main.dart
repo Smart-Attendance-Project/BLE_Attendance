@@ -1,21 +1,39 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:android_intent_plus/android_intent.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_ble_peripheral/flutter_ble_peripheral.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-const String kAdvertiseServiceUuid = '0000180D-0000-1000-8000-00805F9B34FB';
-const int kRssiThreshold = -92;
-const Duration kDetectionPostInterval = Duration(seconds: 10);
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const String kTeacherServiceUuid = '0000180D-0000-1000-8000-00805F9B34FB';
+const String kStudentServiceUuid = '0000181C-0000-1000-8000-00805F9B34FB';
+const int kRssiThreshold = -88;
+const Duration kTeacherDetectionBatchInterval = Duration(seconds: 30);
+const Duration kTeacherPollInterval = Duration(seconds: 10);
+const Duration kStudentSessionPollInterval = Duration(seconds: 15);
+const int kRssiWindowSize = 8;
+const Duration kProximityDebounceDuration = Duration(seconds: 3);
+const int kManufacturerId = 0x004C;
 const String kDefaultApiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
   defaultValue: 'http://192.168.1.7:8000',
 );
+
+// ---------------------------------------------------------------------------
+// App entry point
+// ---------------------------------------------------------------------------
 
 void main() {
   runApp(const BleAttendanceApp());
@@ -39,6 +57,10 @@ class BleAttendanceApp extends StatelessWidget {
 
 enum AppRole { teacher, student }
 
+// ===========================================================================
+// LOGIN PAGE
+// ===========================================================================
+
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
 
@@ -55,6 +77,9 @@ class _LoginPageState extends State<LoginPage> {
   bool _isRegister = false;
   bool _loading = false;
   bool _ready = false;
+  bool _wakingServer = false;
+  int _wakeCountdown = 0;
+  Timer? _wakeTimer;
 
   final _api = ApiClient();
 
@@ -66,13 +91,27 @@ class _LoginPageState extends State<LoginPage> {
 
   Future<void> _bootstrap() async {
     await _api.init();
+    await _api.enablePersistentConnection();
     _serverUrlCtrl.text = _api.baseUrl;
-    if (!mounted) {
-      return;
+    final token = await _api.readToken();
+    if (token != null && token.isNotEmpty) {
+      final roleName = await _api.readRole();
+      if (!mounted) return;
+      if (roleName == AppRole.teacher.name) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => TeacherPage(api: _api)),
+        );
+        return;
+      }
+      if (roleName == AppRole.student.name) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => StudentPage(api: _api)),
+        );
+        return;
+      }
     }
-    setState(() {
-      _ready = true;
-    });
+    if (!mounted) return;
+    setState(() => _ready = true);
   }
 
   @override
@@ -81,17 +120,14 @@ class _LoginPageState extends State<LoginPage> {
     _passwordCtrl.dispose();
     _nameCtrl.dispose();
     _serverUrlCtrl.dispose();
+    _wakeTimer?.cancel();
     super.dispose();
   }
 
   Future<void> _submit() async {
-    setState(() {
-      _loading = true;
-    });
-
+    setState(() => _loading = true);
     try {
       await _api.setBaseUrl(_serverUrlCtrl.text);
-
       if (_isRegister) {
         await _api.register(
           fullName: _nameCtrl.text.trim(),
@@ -100,17 +136,15 @@ class _LoginPageState extends State<LoginPage> {
           role: _role,
         );
       }
-
       final token = await _api.login(
         identifier: _identifierCtrl.text.trim().toUpperCase(),
         password: _passwordCtrl.text,
       );
       await _api.saveToken(token);
-
-      if (!mounted) {
-        return;
-      }
-
+      await _api.saveRole(_role.name);
+      // Save identifier for BLE advertising (student) or display (teacher)
+      await _api.saveIdentifier(_identifierCtrl.text.trim().toUpperCase());
+      if (!mounted) return;
       if (_role == AppRole.teacher) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => TeacherPage(api: _api)),
@@ -121,48 +155,74 @@ class _LoginPageState extends State<LoginPage> {
         );
       }
     } catch (error) {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(_friendlyError(error))));
     } finally {
-      if (mounted) {
-        setState(() {
-          _loading = false;
-        });
-      }
+      if (mounted) setState(() => _loading = false);
     }
   }
 
   Future<void> _testConnection() async {
-    setState(() {
-      _loading = true;
-    });
+    setState(() => _loading = true);
     try {
       await _api.setBaseUrl(_serverUrlCtrl.text);
       await _api.healthCheck();
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Server connection successful.')),
       );
     } catch (error) {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(_friendlyError(error))));
     } finally {
-      if (mounted) {
-        setState(() {
-          _loading = false;
-        });
-      }
+      if (mounted) setState(() => _loading = false);
     }
+  }
+
+  void _wakeServer() async {
+    await _api.setBaseUrl(_serverUrlCtrl.text);
+    setState(() {
+      _wakingServer = true;
+      _wakeCountdown = 60;
+    });
+    _wakeTimer?.cancel();
+    _wakeTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_wakeCountdown <= 0) {
+        timer.cancel();
+        setState(() => _wakingServer = false);
+        return;
+      }
+      setState(() => _wakeCountdown--);
+      // Try health check every 10 seconds
+      if (_wakeCountdown % 10 == 0 || _wakeCountdown == 59) {
+        try {
+          await _api.healthCheck();
+          timer.cancel();
+          if (mounted) {
+            setState(() {
+              _wakingServer = false;
+              _wakeCountdown = 0;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('✅ Server is ready!'),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
+        } catch (_) {
+          // Server still sleeping, keep waiting
+        }
+      }
+    });
   }
 
   @override
@@ -180,11 +240,7 @@ class _LoginPageState extends State<LoginPage> {
                 ButtonSegment(value: AppRole.teacher, label: Text('Teacher')),
               ],
               selected: {_role},
-              onSelectionChanged: (set) {
-                setState(() {
-                  _role = set.first;
-                });
-              },
+              onSelectionChanged: (set) => setState(() => _role = set.first),
             ),
             const SizedBox(height: 12),
             if (_isRegister)
@@ -228,26 +284,40 @@ class _LoginPageState extends State<LoginPage> {
                     : (_isRegister ? 'Register and Login' : 'Login'),
               ),
             ),
+            const SizedBox(height: 4),
             OutlinedButton(
               onPressed: _loading || !_ready ? null : _testConnection,
               child: const Text('Test Connection'),
             ),
+            const SizedBox(height: 4),
+            // Wake server button for Render free tier
+            OutlinedButton.icon(
+              onPressed:
+                  _wakingServer || _loading || !_ready ? null : _wakeServer,
+              icon: _wakingServer
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.power_settings_new),
+              label: Text(
+                _wakingServer
+                    ? 'Waking server... ${_wakeCountdown}s'
+                    : 'Wake Server (Render)',
+              ),
+            ),
+            const SizedBox(height: 4),
             TextButton(
               onPressed: _loading
                   ? null
-                  : () {
-                      setState(() {
-                        _isRegister = !_isRegister;
-                      });
-                    },
+                  : () => setState(() => _isRegister = !_isRegister),
               child: Text(
                 _isRegister
                     ? 'Already have account? Login'
                     : 'New user? Register',
               ),
             ),
-            const SizedBox(height: 8),
-            const Text('Prototype tip: keep app open during class on iOS.'),
           ],
         ),
       ),
@@ -255,9 +325,12 @@ class _LoginPageState extends State<LoginPage> {
   }
 }
 
+// ===========================================================================
+// TEACHER PAGE
+// ===========================================================================
+
 class TeacherPage extends StatefulWidget {
   const TeacherPage({super.key, required this.api});
-
   final ApiClient api;
 
   @override
@@ -267,69 +340,204 @@ class TeacherPage extends StatefulWidget {
 class _TeacherPageState extends State<TeacherPage> {
   final _subjectCtrl = TextEditingController(text: 'Distributed Systems');
   final FlutterBlePeripheral _blePeripheral = FlutterBlePeripheral();
+  final FlutterReactiveBle _ble = FlutterReactiveBle();
 
   String? _sessionId;
   String? _token;
   bool _loading = false;
   bool _isAdvertising = false;
   bool _finalizationOpen = false;
-  List<Map<String, dynamic>> _detections = const [];
+  bool _showEndConfirm = false;
+  bool _isScanning = false;
   Map<String, dynamic>? _summary;
+  Timer? _pollTimer;
+  Timer? _batchTimer;
+  StreamSubscription<DiscoveredDevice>? _scanSub;
+
+  // Local student detection tally (teacher-side)
+  final Map<String, _StudentTally> _studentTallies = {};
+
+  // Queued detections to batch-post
+  final List<Map<String, dynamic>> _pendingDetections = [];
 
   @override
   void initState() {
     super.initState();
+    _initForegroundTask();
     _loadActiveSession();
+    _startPolling();
   }
 
   @override
   void dispose() {
     _subjectCtrl.dispose();
     _blePeripheral.stop();
+    _scanSub?.cancel();
+    _pollTimer?.cancel();
+    _batchTimer?.cancel();
+    FlutterForegroundTask.stopService();
     super.dispose();
   }
 
-  Future<void> _startSession() async {
-    setState(() {
-      _loading = true;
-    });
-    try {
-      final permsOk = await _ensureBleAdvertisePermissions();
-      if (!permsOk) {
-        throw Exception('Bluetooth permissions are required.');
+  void _startPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(kTeacherPollInterval, (_) async {
+      if (!mounted || _loading) return;
+      await _loadActiveSession();
+      if (_sessionId != null) {
+        await _refreshSummary();
       }
+    });
+  }
+
+  void _startBatchPosting() {
+    _batchTimer?.cancel();
+    _batchTimer = Timer.periodic(kTeacherDetectionBatchInterval, (_) async {
+      if (_pendingDetections.isEmpty || _sessionId == null) return;
+      await _flushDetections();
+    });
+  }
+
+  Future<void> _flushDetections() async {
+    if (_pendingDetections.isEmpty) return;
+    final batch = List<Map<String, dynamic>>.from(_pendingDetections);
+    _pendingDetections.clear();
+    try {
+      await widget.api.submitDetectionBatch(batch);
+    } catch (_) {
+      // Re-queue on failure
+      _pendingDetections.insertAll(0, batch);
+    }
+  }
+
+  Future<void> _startSession() async {
+    setState(() => _loading = true);
+    try {
+      final permsOk = await _ensureBlePermissions();
+      if (!permsOk) throw Exception('Bluetooth permissions are required.');
+
+      // Check if BT is on
+      await _ensureBluetoothEnabled();
 
       final session = await widget.api.startSession(_subjectCtrl.text.trim());
       _sessionId = session['id'] as String;
       _token = session['token'] as String;
       _finalizationOpen = (session['finalization_open'] as bool?) ?? false;
 
+      // Start BLE advertising (teacher beacon)
       final data = AdvertiseData(
-        serviceUuid: kAdvertiseServiceUuid,
+        serviceUuid: kTeacherServiceUuid,
         includeDeviceName: false,
-        manufacturerId: 0x004C,
-        manufacturerData: Uint8List.fromList(_token!.codeUnits),
+        manufacturerId: kManufacturerId,
+        manufacturerData: Uint8List.fromList(
+          _encodeTeacherPayload(_token!, _subjectCtrl.text.trim()),
+        ),
       );
       await _blePeripheral.start(advertiseData: data);
       _isAdvertising = true;
 
-      if (mounted) {
-        setState(() {});
-      }
+      // Start scanning for student beacons
+      _startStudentScan();
+      _startBatchPosting();
+
+      // Start foreground service
+      _startForegroundService('Teaching: ${_subjectCtrl.text.trim()}');
+
+      if (mounted) setState(() {});
     } catch (error) {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(_friendlyError(error))));
     } finally {
-      if (mounted) {
-        setState(() {
-          _loading = false;
-        });
-      }
+      if (mounted) setState(() => _loading = false);
     }
+  }
+
+  void _startStudentScan() {
+    _scanSub?.cancel();
+    _isScanning = true;
+    _scanSub = _ble
+        .scanForDevices(
+          withServices: const [],
+          scanMode: ScanMode.lowLatency,
+          requireLocationServicesEnabled: false,
+        )
+        .listen(
+          (device) {
+            final studentId = _extractStudentId(device);
+            if (studentId == null || _sessionId == null) return;
+
+            final rssi = device.rssi;
+            final ok = rssi > kRssiThreshold;
+            final now = DateTime.now();
+
+            // Update local tally
+            final tally = _studentTallies.putIfAbsent(
+              studentId,
+              () => _StudentTally(studentId: studentId),
+            );
+            tally.total++;
+            if (ok) tally.hits++;
+            tally.latestRssi = rssi;
+            tally.latestAt = now;
+            tally.inRange = ok;
+
+            // Queue detection for batch-post
+            _pendingDetections.add({
+              'session_id': _sessionId,
+              'student_identifier': studentId,
+              'rssi': rssi,
+              'proximity_ok': ok,
+            });
+
+            if (mounted) setState(() {});
+          },
+          onError: (_) {
+            if (mounted) setState(() => _isScanning = false);
+            _scheduleStudentScanRetry();
+          },
+          onDone: () {
+            if (mounted) setState(() => _isScanning = false);
+            _scheduleStudentScanRetry();
+          },
+        );
+  }
+
+  void _scheduleStudentScanRetry() {
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted && !_isScanning && _sessionId != null) {
+        _startStudentScan();
+      }
+    });
+  }
+
+  String? _extractStudentId(DiscoveredDevice device) {
+    // Student devices advertise with kStudentServiceUuid and encode
+    // their student ID in manufacturer data
+    if (device.manufacturerData.isEmpty) return null;
+
+    try {
+      final bytes = device.manufacturerData;
+      // First 2 bytes are manufacturer ID, rest is student ID
+      if (bytes.length < 4) return null;
+      final idBytes = bytes.sublist(2);
+      final rawId = utf8.decode(idBytes, allowMalformed: true).trim();
+      // Validate looks like a student ID (alphanumeric, 5-12 chars)
+      if (rawId.length >= 5 &&
+          rawId.length <= 12 &&
+          RegExp(r'^[A-Z0-9]+$').hasMatch(rawId)) {
+        return rawId;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  List<int> _encodeTeacherPayload(String token, String subject) {
+    // Format: token(16 bytes padded) + | + subject(up to 10 bytes)
+    final tokenPart = token.length > 16 ? token.substring(0, 16) : token;
+    final subjectPart = subject.length > 10 ? subject.substring(0, 10) : subject;
+    return utf8.encode('$tokenPart|$subjectPart');
   }
 
   Future<void> _endSession() async {
@@ -348,73 +556,50 @@ class _TeacherPageState extends State<TeacherPage> {
       }
     }
 
-    setState(() {
-      _loading = true;
-    });
+    setState(() => _loading = true);
     try {
+      // Flush remaining detections
+      await _flushDetections();
       await widget.api.endSession(sessionId);
       await _blePeripheral.stop();
+      _scanSub?.cancel();
+      _batchTimer?.cancel();
       _isAdvertising = false;
+      _isScanning = false;
       await _refreshSummary();
+      FlutterForegroundTask.stopService();
       if (mounted) {
         setState(() {
           _sessionId = null;
           _token = null;
           _finalizationOpen = false;
+          _showEndConfirm = false;
+          _studentTallies.clear();
         });
       }
     } catch (error) {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(_friendlyError(error))));
     } finally {
-      if (mounted) {
-        setState(() {
-          _loading = false;
-        });
-      }
+      if (mounted) setState(() => _loading = false);
     }
-  }
-
-  Future<void> _refreshDetections() async {
-    final sessionId = _sessionId;
-    if (sessionId == null) {
-      return;
-    }
-    try {
-      final rows = await widget.api.getDetections(sessionId);
-      if (mounted) {
-        setState(() {
-          _detections = rows.cast<Map<String, dynamic>>();
-        });
-      }
-    } catch (_) {}
   }
 
   Future<void> _refreshSummary() async {
     final sessionId = _sessionId;
-    if (sessionId == null) {
-      return;
-    }
+    if (sessionId == null) return;
     try {
       final summary = await widget.api.getAttendanceSummary(sessionId);
-      if (mounted) {
-        setState(() {
-          _summary = summary;
-        });
-      }
+      if (mounted) setState(() => _summary = summary);
     } catch (_) {}
   }
 
   Future<void> _loadActiveSession() async {
     try {
       final session = await widget.api.getActiveSession();
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       setState(() {
         _sessionId = session['id'] as String;
         _token = session['token'] as String;
@@ -425,17 +610,11 @@ class _TeacherPageState extends State<TeacherPage> {
 
   Future<void> _openFinalization() async {
     final sessionId = _sessionId;
-    if (sessionId == null) {
-      return;
-    }
-    setState(() {
-      _loading = true;
-    });
+    if (sessionId == null) return;
+    setState(() => _loading = true);
     try {
       final session = await widget.api.openFinalization(sessionId);
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       setState(() {
         _finalizationOpen = (session['finalization_open'] as bool?) ?? true;
       });
@@ -443,45 +622,90 @@ class _TeacherPageState extends State<TeacherPage> {
         const SnackBar(content: Text('Finalization opened for students.')),
       );
     } catch (error) {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(_friendlyError(error))));
     } finally {
-      if (mounted) {
-        setState(() {
-          _loading = false;
-        });
-      }
+      if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<void> _downloadAttendanceReport() async {
+    final sessionId = _sessionId ?? _summary?['session_id'];
+    if (sessionId == null) return;
+    setState(() => _loading = true);
+    try {
+      final bytes = await widget.api.downloadAttendanceExcel(sessionId as String);
+      // Save to a temp-ish known location
+      final dir = Directory('/storage/emulated/0/Download');
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+      final file = File(
+        '${dir.path}/attendance_${sessionId.toString().substring(0, 8)}.xlsx',
+      );
+      await file.writeAsBytes(bytes);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Saved to ${file.path}')),
+        );
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_friendlyError(error))));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _logout() async {
+    await _blePeripheral.stop();
+    _scanSub?.cancel();
+    _batchTimer?.cancel();
+    FlutterForegroundTask.stopService();
+    await widget.api.clearSession();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginPage()),
+      (route) => false,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final sortedStudents = _studentTallies.values.toList()
+      ..sort((a, b) => b.hits.compareTo(a.hits));
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Teacher Dashboard')),
+      appBar: AppBar(
+        title: const Text('Teacher Dashboard'),
+        actions: [
+          IconButton(onPressed: _logout, icon: const Icon(Icons.logout)),
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Subject input
             TextField(
               controller: _subjectCtrl,
               decoration: const InputDecoration(labelText: 'Subject'),
             ),
             const SizedBox(height: 12),
+
+            // Start session
             FilledButton(
               onPressed: _loading || _sessionId != null ? null : _startSession,
               child: const Text('Start Session + BLE Broadcast'),
             ),
             const SizedBox(height: 8),
-            FilledButton.tonal(
-              onPressed: _loading ? null : _endSession,
-              child: const Text('End Session'),
-            ),
-            const SizedBox(height: 8),
+
+            // Open finalization
             FilledButton.tonal(
               onPressed: _loading || _sessionId == null || _finalizationOpen
                   ? null
@@ -489,73 +713,123 @@ class _TeacherPageState extends State<TeacherPage> {
               child: const Text('Open Finalization for Students'),
             ),
             const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: _sessionId == null ? null : _refreshDetections,
-                    child: const Text('Refresh Detections'),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: _sessionId == null ? null : _refreshSummary,
-                    child: const Text('Refresh Summary'),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
+
+            // Recover session
             OutlinedButton(
               onPressed: _loadActiveSession,
               child: const Text('Recover Active Session'),
             ),
+            const SizedBox(height: 8),
+
+            // Download attendance
+            OutlinedButton.icon(
+              onPressed: _loading ? null : _downloadAttendanceReport,
+              icon: const Icon(Icons.download),
+              label: const Text('Download Attendance (Excel)'),
+            ),
+
             const SizedBox(height: 12),
-            Text('Session ID: ${_sessionId ?? '-'}'),
-            Text('Token: ${_token ?? '-'}'),
-            Text('BLE Advertising: ${_isAdvertising ? 'ON' : 'OFF'}'),
-            Text('Finalization: ${_finalizationOpen ? 'OPEN' : 'CLOSED'}'),
+
+            // Status row
+            Text('Session: ${_sessionId != null ? "ACTIVE" : "None"}'),
+            Text(
+              'BLE: ${_isAdvertising ? "📡 Advertising" : "OFF"} '
+              '| Scan: ${_isScanning ? "🔍 ON" : "OFF"}',
+            ),
+            Text('Finalization: ${_finalizationOpen ? "OPEN" : "CLOSED"}'),
             if (_summary != null)
               Text(
-                'Present: ${_summary!['present_students']}/${_summary!['total_students']}',
+                'Attendance: ${_summary!['present_students']}/${_summary!['total_students']} present',
               ),
+
             const SizedBox(height: 12),
-            const Text('Recent detections:'),
+            Text(
+              'Students detected (${sortedStudents.length}):',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+
+            // Student hit tally list
             Expanded(
               child: ListView.builder(
-                itemCount: _detections.length,
+                itemCount: sortedStudents.length,
                 itemBuilder: (context, index) {
-                  final row = _detections[index];
+                  final s = sortedStudents[index];
                   return ListTile(
-                    title: Text(
-                      '${row['student_id']} (${row['student_name']})',
-                    ),
+                    dense: true,
+                    title: Text(s.studentId),
                     subtitle: Text(
-                      'RSSI: ${row['rssi']} | ${row['detected_at']}',
+                      'Hits: ${s.hits}/${s.total} '
+                      '| RSSI: ${s.latestRssi} '
+                      '| ${_timeAgo(s.latestAt)}',
                     ),
                     trailing: Icon(
-                      (row['proximity_ok'] as bool?) == true
-                          ? Icons.check_circle
-                          : Icons.cancel,
-                      color: (row['proximity_ok'] as bool?) == true
-                          ? Colors.green
-                          : Colors.red,
+                      s.inRange ? Icons.check_circle : Icons.cancel,
+                      color: s.inRange ? Colors.green : Colors.red,
                     ),
                   );
                 },
               ),
             ),
+
+            // End Session — intentionally at the bottom with spacing
+            const Divider(height: 32),
+            const SizedBox(height: 8),
+            if (_sessionId != null)
+              OutlinedButton(
+                style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
+                onPressed: _loading
+                    ? null
+                    : () => setState(
+                          () => _showEndConfirm = !_showEndConfirm,
+                        ),
+                child: Text(
+                  _showEndConfirm
+                      ? 'Cancel End Confirmation'
+                      : 'Show End Session Button',
+                ),
+              ),
+            if (_showEndConfirm && _sessionId != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: FilledButton(
+                  style:
+                      FilledButton.styleFrom(backgroundColor: Colors.red),
+                  onPressed: _loading ? null : _endSession,
+                  child: const Text('Confirm End Session'),
+                ),
+              ),
+            const SizedBox(height: 16),
           ],
         ),
       ),
     );
   }
+
+  String _timeAgo(DateTime? dt) {
+    if (dt == null) return '-';
+    final diff = DateTime.now().difference(dt);
+    if (diff.inSeconds < 60) return '${diff.inSeconds}s ago';
+    return '${diff.inMinutes}m ago';
+  }
 }
+
+class _StudentTally {
+  _StudentTally({required this.studentId});
+  final String studentId;
+  int hits = 0;
+  int total = 0;
+  int? latestRssi;
+  DateTime? latestAt;
+  bool inRange = false;
+}
+
+// ===========================================================================
+// STUDENT PAGE
+// ===========================================================================
 
 class StudentPage extends StatefulWidget {
   const StudentPage({super.key, required this.api});
-
   final ApiClient api;
 
   @override
@@ -564,26 +838,40 @@ class StudentPage extends StatefulWidget {
 
 class _StudentPageState extends State<StudentPage> {
   final FlutterReactiveBle _ble = FlutterReactiveBle();
+  final FlutterBlePeripheral _blePeripheral = FlutterBlePeripheral();
   final LocalAuthentication _localAuth = LocalAuthentication();
 
   StreamSubscription<DiscoveredDevice>? _scanSub;
   StreamSubscription<BleStatus>? _bleStatusSub;
+
   String? _sessionId;
+  String? _subject;
+  String? _studentIdentifier;
   int? _latestRssi;
-  bool? _proximityOk;
   bool _scanning = false;
+  bool _advertising = false;
   bool _finalizationOpen = false;
   bool _blePermissionsGranted = true;
   String? _scanError;
   Timer? _scanRetryTimer;
+  Timer? _sessionPollTimer;
   BleStatus _bleStatus = BleStatus.unknown;
-  DateTime _lastSentAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  // Debounced proximity
+  bool? _proximityOk;
+  bool? _rawProximityOk;
+  DateTime? _rawProximityChangeAt;
+
+  // RSSI sliding window
+  final List<int> _rssiWindow = [];
 
   @override
   void initState() {
     super.initState();
+    _initForegroundTask();
     _watchBleStatus();
     _bootstrap();
+    _startSessionPolling();
   }
 
   @override
@@ -591,17 +879,25 @@ class _StudentPageState extends State<StudentPage> {
     _scanSub?.cancel();
     _bleStatusSub?.cancel();
     _scanRetryTimer?.cancel();
+    _sessionPollTimer?.cancel();
+    _blePeripheral.stop();
+    FlutterForegroundTask.stopService();
     super.dispose();
+  }
+
+  void _startSessionPolling() {
+    _sessionPollTimer?.cancel();
+    _sessionPollTimer =
+        Timer.periodic(kStudentSessionPollInterval, (_) async {
+      if (!mounted) return;
+      await _loadActiveSession();
+    });
   }
 
   void _watchBleStatus() {
     _bleStatusSub = _ble.statusStream.listen((status) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _bleStatus = status;
-      });
+      if (!mounted) return;
+      setState(() => _bleStatus = status);
 
       if (status == BleStatus.ready &&
           _blePermissionsGranted &&
@@ -622,6 +918,9 @@ class _StudentPageState extends State<StudentPage> {
   }
 
   Future<void> _bootstrap() async {
+    // Load saved student identifier
+    _studentIdentifier = await widget.api.readIdentifier();
+
     final permsOk = await _ensureBleScanPermissions();
     if (!permsOk) {
       if (mounted) {
@@ -637,34 +936,55 @@ class _StudentPageState extends State<StudentPage> {
       }
       return;
     }
+
+    // Prompt to enable BT if needed
+    await _ensureBluetoothEnabled();
+
     await _loadActiveSession();
-    await _startScan();
+    _startScan();
+    _startStudentAdvertising();
+    _startForegroundService('BLE Attendance — scanning');
   }
 
   Future<void> _loadActiveSession() async {
+    // Try server first (may fail if offline — that's ok)
     try {
       final session = await widget.api.getActiveSession();
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       setState(() {
         _sessionId = session['id'] as String;
+        _subject = session['subject'] as String?;
         _finalizationOpen = (session['finalization_open'] as bool?) ?? false;
         _blePermissionsGranted = true;
       });
     } catch (_) {
-      if (mounted) {
-        setState(() {
-          _sessionId = null;
-        });
-      }
+      // Offline — rely on BLE scan to detect teacher beacon
+      // Don't clear session ID if we already have one from BLE
+    }
+  }
+
+  Future<void> _startStudentAdvertising() async {
+    if (_advertising || _studentIdentifier == null) return;
+    try {
+      final permsOk = await _ensureBleAdvertisePermissions();
+      if (!permsOk) return;
+
+      final idBytes = utf8.encode(_studentIdentifier!);
+      final data = AdvertiseData(
+        serviceUuid: kStudentServiceUuid,
+        includeDeviceName: false,
+        manufacturerId: kManufacturerId,
+        manufacturerData: Uint8List.fromList(idBytes),
+      );
+      await _blePeripheral.start(advertiseData: data);
+      if (mounted) setState(() => _advertising = true);
+    } catch (_) {
+      // BLE peripheral advertising may fail on some devices
     }
   }
 
   Future<void> _startScan() async {
-    if (_scanning) {
-      return;
-    }
+    if (_scanning) return;
     if (_bleStatus != BleStatus.ready) {
       if (mounted) {
         setState(() {
@@ -685,36 +1005,36 @@ class _StudentPageState extends State<StudentPage> {
     _scanSub = _ble
         .scanForDevices(
           withServices: const [],
-          scanMode: ScanMode.lowLatency,
+          scanMode: ScanMode.lowPower,
           requireLocationServicesEnabled: false,
         )
         .listen(
-          (device) async {
-            final sessionId = _sessionId;
-            if (sessionId == null) {
-              return;
+          (device) {
+            // Look for teacher beacon
+            final payload = _decodeTeacherPayload(device);
+            if (payload != null) {
+              final rssi = device.rssi;
+              _rssiWindow.add(rssi);
+              if (_rssiWindow.length > kRssiWindowSize) {
+                _rssiWindow.removeAt(0);
+              }
+              final avgRssi = _rssiWindow.isEmpty
+                  ? rssi
+                  : (_rssiWindow.reduce((a, b) => a + b) / _rssiWindow.length)
+                        .round();
+              final ok = avgRssi > kRssiThreshold;
+
+              // Debounce proximity changes
+              _updateDebouncedProximity(ok);
+
+              setState(() {
+                _latestRssi = avgRssi;
+                _sessionId ??= 'ble-detected';
+                if (payload['subject'] != null) {
+                  _subject = payload['subject'] as String;
+                }
+              });
             }
-
-            final rssi = device.rssi;
-            final ok = rssi > kRssiThreshold;
-            setState(() {
-              _latestRssi = rssi;
-              _proximityOk = ok;
-            });
-
-            final now = DateTime.now();
-            if (now.difference(_lastSentAt) < kDetectionPostInterval) {
-              return;
-            }
-
-            try {
-              await widget.api.submitDetection(
-                sessionId: sessionId,
-                rssi: rssi,
-                proximityOk: ok,
-              );
-              _lastSentAt = now;
-            } catch (_) {}
           },
           onError: (error) {
             if (mounted) {
@@ -737,22 +1057,54 @@ class _StudentPageState extends State<StudentPage> {
         );
   }
 
+  void _updateDebouncedProximity(bool newValue) {
+    final now = DateTime.now();
+    if (_rawProximityOk != newValue) {
+      _rawProximityOk = newValue;
+      _rawProximityChangeAt = now;
+    } else if (_rawProximityChangeAt != null &&
+        now.difference(_rawProximityChangeAt!) >= kProximityDebounceDuration) {
+      // Value has been stable for debounce duration — apply it
+      if (_proximityOk != newValue) {
+        setState(() => _proximityOk = newValue);
+      }
+    }
+    // Also set immediately on first reading
+    _proximityOk ??= newValue;
+  }
+
+  Map<String, dynamic>? _decodeTeacherPayload(DiscoveredDevice device) {
+    if (device.manufacturerData.isEmpty) return null;
+    try {
+      final bytes = device.manufacturerData;
+      if (bytes.length < 4) return null;
+      final payload = utf8.decode(bytes.sublist(2), allowMalformed: true);
+      if (!payload.contains('|')) return null;
+      final parts = payload.split('|');
+      return {
+        'token': parts[0],
+        'subject': parts.length > 1 ? parts[1] : null,
+      };
+    } catch (_) {}
+    return null;
+  }
+
   void _scheduleScanRetry() {
     _scanRetryTimer?.cancel();
-    _scanRetryTimer = Timer(const Duration(seconds: 2), () async {
-      if (!mounted ||
-          !_blePermissionsGranted ||
-          _scanning ||
-          _sessionId == null) {
-        return;
-      }
+    _scanRetryTimer = Timer(const Duration(seconds: 3), () async {
+      if (!mounted || !_blePermissionsGranted || _scanning) return;
       await _startScan();
     });
   }
 
   Future<void> _finalizeWithBiometric() async {
     final sessionId = _sessionId;
-    if (sessionId == null) {
+    if (sessionId == null || sessionId == 'ble-detected') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Need server connection to finalize. Check internet.'),
+        ),
+      );
       return;
     }
     if (!_finalizationOpen) {
@@ -765,8 +1117,7 @@ class _StudentPageState extends State<StudentPage> {
     }
 
     try {
-      final canAuth =
-          await _localAuth.canCheckBiometrics ||
+      final canAuth = await _localAuth.canCheckBiometrics ||
           await _localAuth.isDeviceSupported();
       if (!canAuth) {
         throw Exception(
@@ -778,30 +1129,38 @@ class _StudentPageState extends State<StudentPage> {
         localizedReason: 'Authenticate to finalize attendance',
         biometricOnly: false,
       );
-      if (!success) {
-        return;
-      }
+      if (!success) return;
 
       final attendance = await widget.api.finalizeAttendance(sessionId);
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Finalized. Present: ${attendance['is_present']} | Ratio: ${attendance['presence_ratio']}',
+            'Finalized. Present: ${attendance['is_present']} '
+            '| Ratio: ${attendance['presence_ratio']}',
           ),
         ),
       );
     } catch (error) {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(_friendlyError(error))));
     }
+  }
+
+  Future<void> _logout() async {
+    _scanSub?.cancel();
+    _bleStatusSub?.cancel();
+    _blePeripheral.stop();
+    FlutterForegroundTask.stopService();
+    await widget.api.clearSession();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginPage()),
+      (route) => false,
+    );
   }
 
   @override
@@ -810,85 +1169,164 @@ class _StudentPageState extends State<StudentPage> {
         ? Colors.grey
         : (_proximityOk! ? Colors.green : Colors.red);
     final statusText = _proximityOk == null
-        ? 'Searching...'
-        : (_proximityOk! ? 'In range' : 'Out of range');
+        ? 'Searching for teacher...'
+        : (_proximityOk! ? 'In range ✅' : 'Out of range ❌');
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Student Dashboard')),
+      appBar: AppBar(
+        title: const Text('Student Dashboard'),
+        actions: [
+          IconButton(onPressed: _logout, icon: const Icon(Icons.logout)),
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Active Session: ${_sessionId ?? 'Not found'}'),
-            const SizedBox(height: 12),
+            // Lecture name — prominent
+            if (_subject != null && _subject!.isNotEmpty)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.menu_book, size: 28),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        _subject!,
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade200,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Text(
+                  'No active lecture',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+
+            const SizedBox(height: 16),
+
+            // Proximity status
             Row(
               children: [
                 Container(
-                  width: 16,
-                  height: 16,
+                  width: 20,
+                  height: 20,
                   decoration: BoxDecoration(
                     color: statusColor,
                     shape: BoxShape.circle,
                   ),
                 ),
-                const SizedBox(width: 8),
-                Text(statusText),
+                const SizedBox(width: 10),
+                Text(
+                  statusText,
+                  style: const TextStyle(fontSize: 16),
+                ),
               ],
             ),
-            const SizedBox(height: 8),
-            Text('Latest RSSI: ${_latestRssi ?? '-'}'),
+            const SizedBox(height: 12),
+
+            // Status details
+            Text('RSSI: ${_latestRssi ?? '-'}'),
             Text('Scanning: ${_scanning ? 'ON' : 'OFF'}'),
+            Text('Advertising ID: ${_advertising ? (_studentIdentifier ?? '-') : 'OFF'}'),
             Text('Bluetooth: $_bleStatus'),
-            if (_scanError != null) Text('Scan status: $_scanError'),
+            if (_scanError != null) Text('Status: $_scanError'),
             if (!_blePermissionsGranted)
-              const Text('Scanning blocked: enable Nearby devices permission.'),
+              const Text(
+                'Scanning blocked: enable Nearby devices permission.',
+                style: TextStyle(color: Colors.red),
+              ),
             Text(
               'Finalization: ${_finalizationOpen ? 'OPEN' : 'WAITING FOR TEACHER'}',
             ),
-            const SizedBox(height: 16),
-            FilledButton(
+            const Text(
+              'Auto-scanning periodically. No action needed.',
+              style: TextStyle(
+                fontStyle: FontStyle.italic,
+                color: Colors.grey,
+              ),
+            ),
+
+            const SizedBox(height: 20),
+
+            // Biometric finalize
+            FilledButton.icon(
               onPressed: _finalizationOpen ? _finalizeWithBiometric : null,
-              child: const Text('Finalize Attendance (Biometric)'),
+              icon: const Icon(Icons.fingerprint),
+              label: const Text('Finalize Attendance (Biometric)'),
             ),
-            const SizedBox(height: 8),
-            OutlinedButton(
-              onPressed: () async {
-                final permsOk = await _ensureBleScanPermissions();
-                if (!mounted) {
-                  return;
-                }
-                if (!permsOk) {
-                  setState(() {
-                    _blePermissionsGranted = false;
-                    _scanError = 'Nearby devices permission denied.';
-                  });
-                  if (!context.mounted) {
-                    return;
-                  }
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'Grant Nearby devices permission and retry.',
-                      ),
-                    ),
+            const SizedBox(height: 12),
+
+            // Battery settings button
+            if (Platform.isAndroid) ...[
+              OutlinedButton.icon(
+                onPressed: () async {
+                  const intent = AndroidIntent(
+                    action:
+                        'android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS',
                   );
-                  return;
-                }
-                setState(() {
-                  _blePermissionsGranted = true;
-                  _scanError = null;
-                });
-                await _loadActiveSession();
-                await _startScan();
-              },
-              child: const Text('Refresh Active Session'),
-            ),
+                  await intent.launch();
+                },
+                icon: const Icon(Icons.battery_saver),
+                label: const Text('Disable Battery Optimization'),
+              ),
+              const SizedBox(height: 4),
+              OutlinedButton.icon(
+                onPressed: _openAutoStartSettings,
+                icon: const Icon(Icons.settings),
+                label: const Text('Fix Background Restrictions (Xiaomi/Samsung)'),
+              ),
+            ],
           ],
         ),
       ),
     );
   }
+
+  Future<void> _openAutoStartSettings() async {
+    if (!Platform.isAndroid) return;
+    // Try Xiaomi/MIUI autostart intent
+    try {
+      final intent = AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        package: 'com.miui.securitycenter',
+        componentName:
+            'com.miui.securitycenter/com.miui.permcenter.autostart.AutoStartManagementActivity',
+      );
+      await intent.launch();
+      return;
+    } catch (_) {}
+
+    // Fallback: open app info
+    try {
+      final intent = AndroidIntent(
+        action: 'android.settings.APPLICATION_DETAILS_SETTINGS',
+        data: 'package:com.example.ble_attendance_mobile',
+      );
+      await intent.launch();
+    } catch (_) {}
+  }
 }
+
+// ===========================================================================
+// API CLIENT
+// ===========================================================================
 
 class ApiClient {
   ApiClient();
@@ -926,13 +1364,29 @@ class ApiClient {
     await _dio.get('/health');
   }
 
-  Future<void> saveToken(String token) async {
-    await _storage.write(key: 'token', value: token);
+  // Token / role / identifier persistence
+  Future<void> saveToken(String token) =>
+      _storage.write(key: 'token', value: token);
+  Future<String?> readToken() => _storage.read(key: 'token');
+  Future<void> saveRole(String role) =>
+      _storage.write(key: 'role', value: role);
+  Future<String?> readRole() => _storage.read(key: 'role');
+  Future<void> saveIdentifier(String id) =>
+      _storage.write(key: 'identifier', value: id);
+  Future<String?> readIdentifier() => _storage.read(key: 'identifier');
+
+  Future<void> clearSession() async {
+    await _storage.delete(key: 'token');
+    await _storage.delete(key: 'role');
+    await _storage.delete(key: 'identifier');
   }
 
-  Future<String?> _token() async {
-    return _storage.read(key: 'token');
+  Future<void> enablePersistentConnection() async {
+    _dio.options.connectTimeout = const Duration(seconds: 12);
+    _dio.options.receiveTimeout = const Duration(seconds: 12);
   }
+
+  Future<String?> _token() => _storage.read(key: 'token');
 
   Future<Map<String, dynamic>> _authedGet(String path) async {
     final token = await _token();
@@ -965,6 +1419,7 @@ class ApiClient {
     return Map<String, dynamic>.from(response.data as Map);
   }
 
+  // Auth
   Future<void> register({
     required String fullName,
     required String identifier,
@@ -994,51 +1449,54 @@ class ApiClient {
     return json['access_token'] as String;
   }
 
-  Future<Map<String, dynamic>> startSession(String subject) {
-    return _authedPost('/sessions', {'subject': subject});
-  }
+  // Sessions
+  Future<Map<String, dynamic>> startSession(String subject) =>
+      _authedPost('/sessions', {'subject': subject});
 
-  Future<Map<String, dynamic>> endSession(String sessionId) {
-    return _authedPost('/sessions/$sessionId/end', {});
-  }
+  Future<Map<String, dynamic>> endSession(String sessionId) =>
+      _authedPost('/sessions/$sessionId/end', {});
 
-  Future<Map<String, dynamic>> getActiveSession() {
-    return _authedGet('/sessions/active');
-  }
+  Future<Map<String, dynamic>> getActiveSession() =>
+      _authedGet('/sessions/active');
 
-  Future<Map<String, dynamic>> submitDetection({
-    required String sessionId,
-    required int rssi,
-    required bool proximityOk,
-  }) {
-    return _authedPost('/detections', {
-      'session_id': sessionId,
-      'rssi': rssi,
-      'proximity_ok': proximityOk,
-    });
-  }
+  Future<Map<String, dynamic>> openFinalization(String sessionId) =>
+      _authedPost('/teacher/sessions/$sessionId/open-finalization', {});
 
-  Future<Map<String, dynamic>> finalizeAttendance(String sessionId) {
-    return _authedPost('/attendance/finalize', {
-      'session_id': sessionId,
-      'biometric_verified': true,
-    });
-  }
+  // Detections — teacher batch-posts
+  Future<Map<String, dynamic>> submitDetectionBatch(
+    List<Map<String, dynamic>> detections,
+  ) =>
+      _authedPost('/detections/batch', {'detections': detections});
 
-  Future<List<dynamic>> getDetections(String sessionId) {
-    return _authedGetList('/teacher/sessions/$sessionId/detections');
-  }
+  // Attendance
+  Future<Map<String, dynamic>> finalizeAttendance(String sessionId) =>
+      _authedPost('/attendance/finalize', {
+        'session_id': sessionId,
+        'biometric_verified': true,
+      });
 
-  Future<Map<String, dynamic>> getAttendanceSummary(String sessionId) {
-    return _authedGet('/teacher/sessions/$sessionId/attendance-summary');
-  }
+  Future<Map<String, dynamic>> getAttendanceSummary(String sessionId) =>
+      _authedGet('/teacher/sessions/$sessionId/attendance-summary');
 
-  Future<Map<String, dynamic>> openFinalization(String sessionId) {
-    return _authedPost('/teacher/sessions/$sessionId/open-finalization', {});
+  // Excel download
+  Future<List<int>> downloadAttendanceExcel(String sessionId) async {
+    final token = await _token();
+    final response = await _dio.get(
+      '/teacher/sessions/$sessionId/attendance-export',
+      options: Options(
+        headers: {'Authorization': 'Bearer $token'},
+        responseType: ResponseType.bytes,
+      ),
+    );
+    return response.data as List<int>;
   }
 }
 
-Future<bool> _ensureBleAdvertisePermissions() async {
+// ===========================================================================
+// PERMISSIONS & UTILITIES
+// ===========================================================================
+
+Future<bool> _ensureBlePermissions() async {
   final bleStatuses = await [
     Permission.bluetoothScan,
     Permission.bluetoothConnect,
@@ -1046,13 +1504,22 @@ Future<bool> _ensureBleAdvertisePermissions() async {
   ].request();
 
   for (final status in bleStatuses.values) {
-    if (!status.isGranted && !status.isLimited) {
-      return false;
-    }
+    if (!status.isGranted && !status.isLimited) return false;
   }
 
   await Permission.locationWhenInUse.request();
+  return true;
+}
 
+Future<bool> _ensureBleAdvertisePermissions() async {
+  final bleStatuses = await [
+    Permission.bluetoothAdvertise,
+    Permission.bluetoothConnect,
+  ].request();
+
+  for (final status in bleStatuses.values) {
+    if (!status.isGranted && !status.isLimited) return false;
+  }
   return true;
 }
 
@@ -1063,13 +1530,54 @@ Future<bool> _ensureBleScanPermissions() async {
   ].request();
 
   for (final status in bleStatuses.values) {
-    if (!status.isGranted && !status.isLimited) {
-      return false;
-    }
+    if (!status.isGranted && !status.isLimited) return false;
   }
 
   await Permission.locationWhenInUse.request();
   return true;
+}
+
+Future<void> _ensureBluetoothEnabled() async {
+  if (!Platform.isAndroid) return;
+  try {
+    const intent = AndroidIntent(
+      action: 'android.bluetooth.adapter.action.REQUEST_ENABLE',
+    );
+    await intent.launch();
+  } catch (_) {
+    // Silently fail — user will see BLE status in the UI
+  }
+}
+
+void _initForegroundTask() {
+  FlutterForegroundTask.init(
+    androidNotificationOptions: AndroidNotificationOptions(
+      channelId: 'ble_attendance_fg',
+      channelName: 'BLE Attendance',
+      channelDescription: 'Keeps BLE scanning/advertising alive',
+      channelImportance: NotificationChannelImportance.LOW,
+      priority: NotificationPriority.LOW,
+    ),
+    iosNotificationOptions: const IOSNotificationOptions(
+      showNotification: false,
+      playSound: false,
+    ),
+    foregroundTaskOptions: ForegroundTaskOptions(
+      eventAction: ForegroundTaskEventAction.nothing(),
+      autoRunOnBoot: false,
+      autoRunOnMyPackageReplaced: false,
+      allowWakeLock: true,
+      allowWifiLock: false,
+    ),
+  );
+}
+
+Future<void> _startForegroundService(String text) async {
+  if (!Platform.isAndroid) return;
+  await FlutterForegroundTask.startService(
+    notificationTitle: 'BLE Attendance',
+    notificationText: text,
+  );
 }
 
 String _friendlyError(Object error) {
@@ -1091,19 +1599,14 @@ String _friendlyError(Object error) {
 
 String _normalizeBaseUrl(String input) {
   final raw = input.trim();
-  if (raw.isEmpty) {
-    throw Exception('Server URL is required.');
-  }
-
+  if (raw.isEmpty) throw Exception('Server URL is required.');
   final withScheme = raw.startsWith('http://') || raw.startsWith('https://')
       ? raw
       : 'http://$raw';
-
   final uri = Uri.tryParse(withScheme);
   if (uri == null || uri.host.isEmpty) {
     throw Exception('Enter a valid server URL.');
   }
-
   return withScheme.endsWith('/')
       ? withScheme.substring(0, withScheme.length - 1)
       : withScheme;
