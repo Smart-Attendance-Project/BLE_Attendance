@@ -3,7 +3,7 @@ services:
     name: ble-attendance-api
     runtime: python
     rootDir: backend
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && python scripts/seed_full.py
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --app-dir .
     envVars:
       - key: PYTHONPATH
