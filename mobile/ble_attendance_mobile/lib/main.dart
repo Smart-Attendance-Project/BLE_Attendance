@@ -28,7 +28,7 @@ const Duration kProximityDebounceDuration = Duration(seconds: 3);
 const int kManufacturerId = 0x004C;
 const String kDefaultApiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
-  defaultValue: 'http://192.168.1.7:8000',
+  defaultValue: 'https://ble-attendance-api.onrender.com',
 );
 
 // ---------------------------------------------------------------------------
@@ -255,7 +255,7 @@ class _LoginPageState extends State<LoginPage> {
               decoration: InputDecoration(
                 labelText: _role == AppRole.teacher
                     ? 'Teacher ID (e.g. T001)'
-                    : 'Student ID (e.g. 25CE099)',
+                    : 'Student ID (e.g. 25CE001)',
               ),
             ),
             const SizedBox(height: 12),
@@ -264,59 +264,21 @@ class _LoginPageState extends State<LoginPage> {
               decoration: const InputDecoration(labelText: 'Password'),
               obscureText: true,
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _serverUrlCtrl,
-              keyboardType: TextInputType.url,
-              decoration: const InputDecoration(
-                labelText: 'Server URL',
-                hintText: 'http://192.168.1.10:8000',
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text('For real phones use http://<laptop-ip>:8000'),
             const SizedBox(height: 16),
             FilledButton(
               onPressed: _loading || !_ready ? null : _submit,
-              child: Text(
-                _loading
-                    ? 'Please wait...'
-                    : (_isRegister ? 'Register and Login' : 'Login'),
-              ),
-            ),
-            const SizedBox(height: 4),
-            OutlinedButton(
-              onPressed: _loading || !_ready ? null : _testConnection,
-              child: const Text('Test Connection'),
-            ),
-            const SizedBox(height: 4),
-            // Wake server button for Render free tier
-            OutlinedButton.icon(
-              onPressed:
-                  _wakingServer || _loading || !_ready ? null : _wakeServer,
-              icon: _wakingServer
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.power_settings_new),
-              label: Text(
-                _wakingServer
-                    ? 'Waking server... ${_wakeCountdown}s'
-                    : 'Wake Server (Render)',
-              ),
+              child: Text(_loading
+                  ? 'Please wait...'
+                  : (_isRegister ? 'Register and Login' : 'Login')),
             ),
             const SizedBox(height: 4),
             TextButton(
               onPressed: _loading
                   ? null
                   : () => setState(() => _isRegister = !_isRegister),
-              child: Text(
-                _isRegister
-                    ? 'Already have account? Login'
-                    : 'New user? Register',
-              ),
+              child: Text(_isRegister
+                  ? 'Already have account? Login'
+                  : 'New user? Register'),
             ),
           ],
         ),
@@ -338,9 +300,354 @@ class TeacherPage extends StatefulWidget {
 }
 
 class _TeacherPageState extends State<TeacherPage> {
-  final _subjectCtrl = TextEditingController(text: 'Distributed Systems');
   final FlutterBlePeripheral _blePeripheral = FlutterBlePeripheral();
   final FlutterReactiveBle _ble = FlutterReactiveBle();
+
+  String? _sessionId;
+  String? _token;
+  bool _loading = false;
+  bool _isAdvertising = false;
+  bool _finalizationOpen = false;
+  bool _showEndConfirm = false;
+  bool _isScanning = false;
+  Map<String, dynamic>? _summary;
+  Timer? _scanRetryTimer;
+  StreamSubscription<DiscoveredDevice>? _scanSub;
+
+  // Today's schedule slots from server
+  List<Map<String, dynamic>> _todaySlots = [];
+  Map<String, dynamic>? _selectedSlot;
+
+  // Local student detection tally
+  final Map<String, _StudentTally> _studentTallies = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _initForegroundTask();
+    _loadTodaySchedule();
+    _loadActiveSession();
+  }
+
+  @override
+  void dispose() {
+    _blePeripheral.stop();
+    _scanSub?.cancel();
+    _scanRetryTimer?.cancel();
+    FlutterForegroundTask.stopService();
+    super.dispose();
+  }
+
+  Future<void> _loadTodaySchedule() async {
+    try {
+      final slots = await widget.api.getTodaySlots();
+      if (mounted) setState(() => _todaySlots = slots);
+    } catch (_) {}
+  }
+
+  Future<void> _startSession() async {
+    if (_selectedSlot == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Select a class first')),
+      );
+      return;
+    }
+    setState(() => _loading = true);
+    try {
+      final permsOk = await _ensureBlePermissions();
+      if (!permsOk) throw Exception('Bluetooth permissions are required.');
+      await _ensureBluetoothEnabled();
+
+      final subjectName = _selectedSlot!['subject_name'] as String;
+      final assignmentId = _selectedSlot!['assignment_id'] as int;
+
+      final session = await widget.api.startSession(subjectName, assignmentId: assignmentId);
+      _sessionId = session['id'] as String;
+      _token = session['token'] as String;
+      _finalizationOpen = (session['finalization_open'] as bool?) ?? false;
+
+      final data = AdvertiseData(
+        serviceUuid: kTeacherServiceUuid,
+        includeDeviceName: false,
+        manufacturerId: kManufacturerId,
+        manufacturerData: Uint8List.fromList(
+          _encodeTeacherPayload(_token!, subjectName),
+        ),
+      );
+      await _blePeripheral.start(advertiseData: data);
+      _isAdvertising = true;
+      _startStudentScan();
+      _startForegroundService('Teaching: $subjectName');
+      if (mounted) setState(() {});
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_friendlyError(error))));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _startStudentScan() {
+    _scanSub?.cancel();
+    _isScanning = true;
+    _scanSub = _ble.scanForDevices(
+      withServices: const [],
+      scanMode: ScanMode.lowLatency,
+      requireLocationServicesEnabled: false,
+    ).listen(
+      (device) {
+        final studentId = _extractStudentId(device);
+        if (studentId == null || _sessionId == null) return;
+        final rssi = device.rssi;
+        final ok = rssi > kRssiThreshold;
+        final tally = _studentTallies.putIfAbsent(
+          studentId, () => _StudentTally(studentId: studentId),
+        );
+        tally.total++;
+        if (ok) tally.hits++;
+        tally.latestRssi = rssi;
+        tally.latestAt = DateTime.now();
+        tally.inRange = ok;
+        if (mounted) setState(() {});
+      },
+      onError: (_) { if (mounted) setState(() => _isScanning = false); _scheduleStudentScanRetry(); },
+      onDone: () { if (mounted) setState(() => _isScanning = false); _scheduleStudentScanRetry(); },
+    );
+  }
+
+  void _scheduleStudentScanRetry() {
+    _scanRetryTimer?.cancel();
+    _scanRetryTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted && !_isScanning && _sessionId != null) _startStudentScan();
+    });
+  }
+
+  String? _extractStudentId(DiscoveredDevice device) {
+    if (device.manufacturerData.isEmpty) return null;
+    try {
+      final bytes = device.manufacturerData;
+      if (bytes.length < 4) return null;
+      final rawId = utf8.decode(bytes.sublist(2), allowMalformed: true).trim();
+      if (rawId.length >= 5 && rawId.length <= 12 && RegExp(r'^[A-Z0-9]+$').hasMatch(rawId)) {
+        return rawId;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  List<int> _encodeTeacherPayload(String token, String subject) {
+    final tokenPart = token.length > 16 ? token.substring(0, 16) : token;
+    final subjectPart = subject.length > 10 ? subject.substring(0, 10) : subject;
+    return utf8.encode('$tokenPart|$subjectPart');
+  }
+
+  Future<void> _endSession() async {
+    var sessionId = _sessionId;
+    if (sessionId == null) {
+      try {
+        final active = await widget.api.getActiveSession();
+        sessionId = active['id'] as String;
+      } catch (_) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No active session.')));
+        return;
+      }
+    }
+    setState(() => _loading = true);
+    try {
+      // Build final P/A list from local tallies and batch-submit
+      final decisions = _studentTallies.values.map((t) => {
+        'student_id': t.studentId,
+        'is_present': t.hits > 0 && (t.hits / t.total) >= 0.6,
+      }).toList();
+
+      if (decisions.isNotEmpty) {
+        await widget.api.batchSubmitAttendance(sessionId!, decisions);
+      }
+
+      await widget.api.endSession(sessionId!);
+      await _blePeripheral.stop();
+      _scanSub?.cancel();
+      _isAdvertising = false;
+      _isScanning = false;
+      FlutterForegroundTask.stopService();
+
+      // Refresh summary
+      try {
+        final summary = await widget.api.getAttendanceSummary(sessionId!);
+        if (mounted) setState(() => _summary = summary);
+      } catch (_) {}
+
+      if (mounted) {
+        setState(() {
+          _sessionId = null;
+          _token = null;
+          _finalizationOpen = false;
+          _showEndConfirm = false;
+          _studentTallies.clear();
+        });
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_friendlyError(error))));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _loadActiveSession() async {
+    try {
+      final session = await widget.api.getActiveSession();
+      if (!mounted) return;
+      setState(() {
+        _sessionId = session['id'] as String;
+        _token = session['token'] as String;
+        _finalizationOpen = (session['finalization_open'] as bool?) ?? false;
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _openFinalization() async {
+    final sessionId = _sessionId;
+    if (sessionId == null) return;
+    setState(() => _loading = true);
+    try {
+      final session = await widget.api.openFinalization(sessionId);
+      if (!mounted) return;
+      setState(() => _finalizationOpen = (session['finalization_open'] as bool?) ?? true);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Finalization opened for students.')));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_friendlyError(error))));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _logout() async {
+    await _blePeripheral.stop();
+    _scanSub?.cancel();
+    FlutterForegroundTask.stopService();
+    await widget.api.clearSession();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginPage()), (route) => false,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sortedStudents = _studentTallies.values.toList()
+      ..sort((a, b) => b.hits.compareTo(a.hits));
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Teacher Dashboard'),
+        actions: [IconButton(onPressed: _logout, icon: const Icon(Icons.logout))],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Class picker (only when no active session)
+            if (_sessionId == null) ...[
+              const Text('Select class to start:', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              if (_todaySlots.isEmpty)
+                const Text('No classes scheduled today.', style: TextStyle(color: Colors.grey))
+              else
+                ...(_todaySlots.map((slot) {
+                  final isSelected = _selectedSlot?['slot_id'] == slot['slot_id'];
+                  return Card(
+                    color: isSelected ? Theme.of(context).colorScheme.primaryContainer : null,
+                    child: ListTile(
+                      title: Text('${slot['subject_name']} (${slot['subject_code']})'),
+                      subtitle: Text(
+                        '${slot['division_label']}${slot['batch_label'] != null ? ' / ${slot['batch_label']}' : ''}'
+                        ' · ${slot['time_start']}–${slot['time_end']}'
+                        '${slot['room'] != null ? ' · ${slot['room']}' : ''}',
+                      ),
+                      onTap: () => setState(() => _selectedSlot = slot),
+                      trailing: isSelected ? const Icon(Icons.check_circle, color: Colors.green) : null,
+                    ),
+                  );
+                })),
+              const SizedBox(height: 12),
+              FilledButton(
+                onPressed: _loading || _selectedSlot == null ? null : _startSession,
+                child: const Text('Start Session + BLE Broadcast'),
+              ),
+            ] else ...[
+              // Active session info
+              Card(
+                color: Theme.of(context).colorScheme.primaryContainer,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Session Active', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+                      Text('BLE: ${_isAdvertising ? "Broadcasting" : "OFF"} | Scan: ${_isScanning ? "ON" : "OFF"}'),
+                      Text('Finalization: ${_finalizationOpen ? "OPEN" : "CLOSED"}'),
+                      if (_summary != null)
+                        Text('Attendance: ${_summary!['present_students']}/${_summary!['total_students']} present'),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              FilledButton.tonal(
+                onPressed: _loading || _finalizationOpen ? null : _openFinalization,
+                child: const Text('Open Finalization for Students'),
+              ),
+              const SizedBox(height: 8),
+              Text('Students detected (${sortedStudents.length}):', style: const TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 4),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: sortedStudents.length,
+                  itemBuilder: (context, index) {
+                    final s = sortedStudents[index];
+                    return ListTile(
+                      dense: true,
+                      title: Text(s.studentId),
+                      subtitle: Text('Hits: ${s.hits}/${s.total} | RSSI: ${s.latestRssi} | ${_timeAgo(s.latestAt)}'),
+                      trailing: Icon(s.inRange ? Icons.check_circle : Icons.cancel,
+                          color: s.inRange ? Colors.green : Colors.red),
+                    );
+                  },
+                ),
+              ),
+              const Divider(height: 24),
+              OutlinedButton(
+                style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
+                onPressed: _loading ? null : () => setState(() => _showEndConfirm = !_showEndConfirm),
+                child: Text(_showEndConfirm ? 'Cancel' : 'End Session'),
+              ),
+              if (_showEndConfirm)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: FilledButton(
+                    style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                    onPressed: _loading ? null : _endSession,
+                    child: const Text('Confirm End + Submit Attendance'),
+                  ),
+                ),
+            ],
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _timeAgo(DateTime? dt) {
+    if (dt == null) return '-';
+    final diff = DateTime.now().difference(dt);
+    if (diff.inSeconds < 60) return '${diff.inSeconds}s ago';
+    return '${diff.inMinutes}m ago';
+  }
+}
 
   String? _sessionId;
   String? _token;
@@ -1450,8 +1757,11 @@ class ApiClient {
   }
 
   // Sessions
-  Future<Map<String, dynamic>> startSession(String subject) =>
-      _authedPost('/sessions', {'subject': subject});
+  Future<Map<String, dynamic>> startSession(String subject, {int? assignmentId}) =>
+      _authedPost('/sessions', {
+        'subject': subject,
+        if (assignmentId != null) 'assignment_id': assignmentId,
+      });
 
   Future<Map<String, dynamic>> endSession(String sessionId) =>
       _authedPost('/sessions/$sessionId/end', {});
@@ -1462,11 +1772,29 @@ class ApiClient {
   Future<Map<String, dynamic>> openFinalization(String sessionId) =>
       _authedPost('/teacher/sessions/$sessionId/open-finalization', {});
 
-  // Detections — teacher batch-posts
-  Future<Map<String, dynamic>> submitDetectionBatch(
-    List<Map<String, dynamic>> detections,
-  ) =>
-      _authedPost('/detections/batch', {'detections': detections});
+  // Today's schedule for mobile
+  Future<List<Map<String, dynamic>>> getTodaySlots() async {
+    final token = await _token();
+    final response = await _dio.get(
+      '/teacher/me/schedule/today/slots',
+      options: Options(headers: {'Authorization': 'Bearer $token'}),
+    );
+    return (response.data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  // Batch submit final P/A at session end (replaces per-detection pings)
+  Future<Map<String, dynamic>> batchSubmitAttendance(
+    String sessionId,
+    List<Map<String, dynamic>> decisions,
+  ) async {
+    final token = await _token();
+    final response = await _dio.post(
+      '/teacher/sessions/$sessionId/attendance/batch-submit',
+      data: decisions,
+      options: Options(headers: {'Authorization': 'Bearer $token'}),
+    );
+    return Map<String, dynamic>.from(response.data as Map);
+  }
 
   // Attendance
   Future<Map<String, dynamic>> finalizeAttendance(String sessionId) =>

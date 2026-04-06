@@ -769,6 +769,72 @@ def admin_override_attendance(session_id: str, payload: AttendanceOverrideIn,
                          biometric_verified=att.biometric_verified)
 
 
+@app.post("/teacher/sessions/{session_id}/attendance/batch-submit")
+def batch_submit_attendance(
+    session_id: str,
+    payload: list[dict],
+    db: Session = Depends(get_db),
+    teacher: User = Depends(require_role(UserRole.teacher)),
+):
+    """Teacher phone submits final P/A list in one call at session end."""
+    session = _get_own_session(db, session_id, teacher.id)
+    if session.attendance_locked:
+        raise HTTPException(status_code=409, detail="Attendance is locked")
+    updated = 0
+    for item in payload:
+        student = db.scalar(select(User).where(User.student_id == item["student_id"]))
+        if not student:
+            continue
+        att = db.scalar(select(Attendance).where(
+            and_(Attendance.session_id == session_id,
+                 Attendance.student_user_id == student.id)
+        ))
+        if att is None:
+            att = Attendance(session_id=session_id, student_user_id=student.id,
+                             presence_ratio=0.0, biometric_verified=False)
+            db.add(att)
+        att.is_present = item["is_present"]
+        att.presence_ratio = 1.0 if item["is_present"] else 0.0
+        att.overridden_by_teacher = True
+        att.override_reason = "BLE batch submit"
+        updated += 1
+    db.commit()
+    return {"message": f"{updated} attendance records saved"}
+
+
+@app.get("/teacher/me/schedule/today/slots")
+def teacher_today_slots_mobile(db: Session = Depends(get_db),
+                               teacher: User = Depends(require_role(UserRole.teacher))):
+    """Today's schedule with full detail for mobile app start-session flow."""
+    today = datetime.utcnow().weekday()
+    sem = db.scalar(select(Semester).where(Semester.is_active.is_(True)))
+    if not sem:
+        return []
+    slots = db.execute(
+        select(ScheduleSlot).where(
+            and_(ScheduleSlot.day_of_week == today, ScheduleSlot.semester_id == sem.id)
+        ).order_by(ScheduleSlot.time_start)
+    ).scalars().all()
+    result = []
+    for slot in slots:
+        a = slot.assignment
+        if a.teacher_user_id != teacher.id:
+            continue
+        result.append({
+            "slot_id": slot.id,
+            "assignment_id": slot.assignment_id,
+            "subject_name": a.subject.name if a.subject else "",
+            "subject_code": a.subject.code if a.subject else "",
+            "division_label": a.division.label if a.division else "",
+            "batch_label": a.batch.label if a.batch else None,
+            "time_start": slot.time_start,
+            "time_end": slot.time_end,
+            "room": slot.room,
+            "subject_type": a.subject.subject_type if a.subject else "lecture",
+        })
+    return result
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _get_own_session(db, session_id, teacher_id):
