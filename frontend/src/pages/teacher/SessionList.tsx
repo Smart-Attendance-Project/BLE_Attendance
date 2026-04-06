@@ -64,7 +64,7 @@ export default function SessionList() {
           <ChevronLeft size={16} /> Back to sessions
         </button>
 
-        <div className="bg-white border-2 border-black rounded-xl p-4 mb-5 shadow-[4px_4px_0_0_#000] flex items-center justify-between gap-4 flex-wrap">
+        <div className="bg-zinc-50 border-2 border-black rounded-xl p-4 mb-5 shadow-[4px_4px_0_0_#000] flex items-center justify-between gap-4 flex-wrap">
           <div>
             <h2 className="font-black text-zinc-900 text-lg">{summary.subject}</h2>
             <p className="text-sm text-zinc-500">{new Date(summary.starts_at).toLocaleDateString('en-IN', { dateStyle: 'full' })}</p>
@@ -86,11 +86,11 @@ export default function SessionList() {
           <div className="mb-4">
             <input placeholder="Override reason (optional)"
               value={overrideReason} onChange={e => setOverrideReason(e.target.value)}
-              className="border-2 border-black rounded-lg px-3 py-2 text-sm w-72 focus:outline-none focus:ring-2 focus:ring-yellow-400 shadow-[2px_2px_0_0_#000]" />
+              className="border-2 border-black rounded-lg px-3 py-2 text-sm w-72 focus:outline-none focus:ring-2 focus:ring-indigo-400 shadow-[2px_2px_0_0_#000]" />
           </div>
         )}
 
-        <div className="bg-white border-2 border-black rounded-xl overflow-hidden shadow-[4px_4px_0_0_#000]">
+        <div className="bg-zinc-50 border-2 border-black rounded-xl overflow-hidden shadow-[4px_4px_0_0_#000]">
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-zinc-900 text-white">
@@ -118,7 +118,7 @@ export default function SessionList() {
                     <button
                       disabled={!editable}
                       onClick={() => overrideMut.mutate({ studentId: r.student_user_id, isPresent: !r.is_present })}
-                      className="text-xs px-2.5 py-1 rounded border-2 border-black font-semibold bg-white hover:bg-yellow-400 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-white transition-colors shadow-[1px_1px_0_0_#000] disabled:shadow-none">
+                      className="text-xs px-2.5 py-1 rounded border-2 border-black font-semibold bg-white hover:bg-indigo-100 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-white transition-colors shadow-[1px_1px_0_0_#000] disabled:shadow-none">
                       Mark {r.is_present ? 'Absent' : 'Present'}
                     </button>
                   </td>
@@ -199,7 +199,7 @@ export default function SessionList() {
                 className="text-left bg-white border-2 border-black rounded-xl p-4 shadow-[4px_4px_0_0_#000] hover:shadow-[2px_2px_0_0_#000] hover:translate-x-0.5 hover:translate-y-0.5 transition-all">
                 <div className="font-bold text-zinc-900">{a.division_label}</div>
                 {a.batch_label && (
-                  <span className="inline-block mt-1 bg-yellow-400 border border-black text-black text-xs font-bold px-2 py-0.5 rounded">
+                  <span className="inline-block mt-1 bg-indigo-100 border border-black text-black text-xs font-bold px-2 py-0.5 rounded">
                     Batch {a.batch_label}
                   </span>
                 )}

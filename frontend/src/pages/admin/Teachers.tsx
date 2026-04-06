@@ -19,7 +19,7 @@ export default function Teachers() {
     <div className="p-6 max-w-3xl mx-auto">
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Teachers</h1>
 
-      <div className="bg-white border border-gray-200 rounded-xl p-5 mb-6">
+      <div className="bg-zinc-50 border border-gray-200 rounded-xl p-5 mb-6">
         <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2"><UserPlus size={16} />Add Teacher</h3>
         <div className="flex gap-3 flex-wrap">
           <input placeholder="Full Name" value={form.full_name} onChange={e => setForm(f => ({ ...f, full_name: e.target.value }))}
@@ -36,7 +36,7 @@ export default function Teachers() {
         {err && <p className="text-red-600 text-xs mt-2">{err}</p>}
       </div>
 
-      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+      <div className="bg-zinc-50 border border-gray-200 rounded-xl overflow-hidden">
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-200">

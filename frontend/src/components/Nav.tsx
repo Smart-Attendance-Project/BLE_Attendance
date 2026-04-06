@@ -23,7 +23,7 @@ export function Nav() {
   return (
     <nav className="bg-zinc-900 border-b-2 border-black text-white px-5 py-3 flex items-center gap-2 shadow-[0_4px_0_0_#000]">
       <div className="flex items-center gap-2 mr-5">
-        <div className="bg-yellow-400 text-black p-1 rounded border-2 border-black">
+        <div className="bg-indigo-500 text-white p-1 rounded border-2 border-black">
           <GraduationCap size={18} />
         </div>
         <span className="font-black text-base tracking-tight">BLE Attendance</span>

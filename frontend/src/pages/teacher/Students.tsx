@@ -49,7 +49,7 @@ export default function Students() {
       </div>
 
       {showForm && divId && (
-        <div className="bg-white border border-gray-200 rounded-xl p-4 mb-5">
+        <div className="bg-zinc-50 border border-gray-200 rounded-xl p-4 mb-5">
           <h3 className="font-semibold text-gray-800 mb-3">Add Student</h3>
           <div className="flex flex-col gap-3">
             <div className="flex gap-3">
@@ -75,7 +75,7 @@ export default function Students() {
       )}
 
       {divId && (
-        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+        <div className="bg-zinc-50 border border-gray-200 rounded-xl overflow-hidden">
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">

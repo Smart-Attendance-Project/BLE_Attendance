@@ -37,7 +37,7 @@ export default function TeacherDashboard() {
           <Link key={slot.id} to={`/teacher/sessions?assignment_id=${slot.assignment_id}`}
             className="group bg-white border-2 border-black rounded-xl p-4 shadow-[4px_4px_0_0_#000] hover:shadow-[2px_2px_0_0_#000] hover:translate-x-0.5 hover:translate-y-0.5 transition-all">
             <div className="flex items-start justify-between mb-3">
-              <span className="bg-yellow-400 border border-black text-black text-xs font-bold px-2 py-0.5 rounded">
+              <span className="bg-indigo-100 border border-black text-black text-xs font-bold px-2 py-0.5 rounded">
                 {slot.time_start}–{slot.time_end}
               </span>
               <ArrowRight size={16} className="text-zinc-300 group-hover:text-black transition-colors mt-0.5" />

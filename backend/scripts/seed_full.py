@@ -330,11 +330,14 @@ def main():
             assign_cache[key] = a
             return a
 
-        # Clear old slots for this semester
-        old = db.execute(select(ScheduleSlot).where(ScheduleSlot.semester_id == sem.id)).scalars().all()
-        for s in old:
+        # Wipe ALL assignments and slots cleanly before rebuilding
+        for s in db.execute(select(ScheduleSlot)).scalars().all():
             db.delete(s)
         db.flush()
+        for a in db.execute(select(TeacherAssignment)).scalars().all():
+            db.delete(a)
+        db.flush()
+        assign_cache.clear()
 
         # Add Div1 slots
         for (short, scode, blbl, day, ts, te, room) in CE_DIV1_SLOTS:

@@ -102,7 +102,7 @@ export default function Schedule() {
       {/* ── Semesters ── */}
       {tab === 'semesters' && (
         <div className="max-w-2xl">
-          <div className="bg-white border border-gray-200 rounded-xl p-5 mb-5">
+          <div className="bg-zinc-50 border border-gray-200 rounded-xl p-5 mb-5">
             <h3 className="font-semibold text-gray-800 mb-4">Add Semester</h3>
             <div className="flex flex-col gap-3">
               <input className={inp} placeholder="Name (e.g. Sem II 2025-26)" value={semForm.name} onChange={e => setSemForm(f => ({ ...f, name: e.target.value }))} />
@@ -119,7 +119,7 @@ export default function Schedule() {
               </div>
             </div>
           </div>
-          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="bg-zinc-50 border border-gray-200 rounded-xl overflow-hidden">
             <table className="w-full text-sm">
               <thead><tr className="bg-gray-50 border-b border-gray-200">{['Name','Start','End','Status',''].map(h=><th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}</tr></thead>
               <tbody className="divide-y divide-gray-100">
@@ -141,7 +141,7 @@ export default function Schedule() {
       {/* ── Branches & Divisions ── */}
       {tab === 'branches' && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-white border border-gray-200 rounded-xl p-5">
+          <div className="bg-zinc-50 border border-gray-200 rounded-xl p-5">
             <h3 className="font-semibold text-gray-800 mb-4">Branches</h3>
             <div className="flex gap-2 mb-4">
               <input className={`${inp} w-20`} placeholder="Code" value={branchForm.code} onChange={e => setBranchForm(f => ({ ...f, code: e.target.value }))} />
@@ -153,7 +153,7 @@ export default function Schedule() {
             </div>
           </div>
 
-          <div className="bg-white border border-gray-200 rounded-xl p-5">
+          <div className="bg-zinc-50 border border-gray-200 rounded-xl p-5">
             <h3 className="font-semibold text-gray-800 mb-4">Divisions</h3>
             <div className="flex flex-col gap-2 mb-4">
               <select className={inp} value={divForm.branch_id} onChange={e => setDivForm(f => ({ ...f, branch_id: e.target.value }))}>
@@ -176,7 +176,7 @@ export default function Schedule() {
             </div>
           </div>
 
-          <div className="bg-white border border-gray-200 rounded-xl p-5">
+          <div className="bg-zinc-50 border border-gray-200 rounded-xl p-5">
             <h3 className="font-semibold text-gray-800 mb-4">Batches</h3>
             <div className="flex flex-col gap-2 mb-4">
               <select className={inp} value={batchDivId} onChange={e => setBatchDivId(e.target.value)}>
@@ -196,7 +196,7 @@ export default function Schedule() {
       {/* ── Assignments ── */}
       {tab === 'assignments' && (
         <div>
-          <div className="bg-white border border-gray-200 rounded-xl p-5 mb-5 max-w-2xl">
+          <div className="bg-zinc-50 border border-gray-200 rounded-xl p-5 mb-5 max-w-2xl">
             <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2"><Plus size={15} />Assign Teacher to Subject + Division</h3>
             <div className="grid grid-cols-2 gap-3">
               <select className={inp} value={aForm.teacher_user_id} onChange={e => setAForm(f => ({ ...f, teacher_user_id: e.target.value }))}>
@@ -218,7 +218,7 @@ export default function Schedule() {
             </div>
             <button className={`${btn} mt-3`} onClick={() => assignMut.mutate()} disabled={!aForm.teacher_user_id || !aForm.subject_id || !aForm.division_id}>Assign</button>
           </div>
-          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="bg-zinc-50 border border-gray-200 rounded-xl overflow-hidden">
             <table className="w-full text-sm">
               <thead><tr className="bg-gray-50 border-b border-gray-200">{['Teacher','Subject','Division','Batch',''].map(h=><th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}</tr></thead>
               <tbody className="divide-y divide-gray-100">
@@ -246,7 +246,7 @@ export default function Schedule() {
               <div className="flex items-center justify-between mb-4">
                 <p className="text-sm text-gray-600">Active: <strong>{activeSem.name}</strong></p>
               </div>
-              <div className="bg-white border border-gray-200 rounded-xl p-4 mb-5">
+              <div className="bg-zinc-50 border border-gray-200 rounded-xl p-4 mb-5">
                 <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2"><Plus size={15} />Add Slot</h3>
                 <div className="flex gap-3 flex-wrap items-end">
                   <select className={inp} value={slotForm.assignment_id} onChange={e => setSlotForm(f => ({ ...f, assignment_id: e.target.value }))}>

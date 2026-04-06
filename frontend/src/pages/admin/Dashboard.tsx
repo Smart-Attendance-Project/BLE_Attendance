@@ -23,7 +23,7 @@ export default function AdminDashboard() {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
         {cards.map(c => (
-          <Link key={c.label} to={c.link} className="bg-white border border-gray-200 rounded-xl p-4 hover:shadow-md hover:border-gray-300 transition-all group">
+          <Link key={c.label} to={c.link} className="bg-zinc-50 border border-gray-200 rounded-xl p-4 hover:shadow-md hover:border-gray-300 transition-all group">
             <div className={`w-10 h-10 rounded-lg flex items-center justify-center mb-3 ${c.color}`}>
               <c.icon size={20} />
             </div>
@@ -40,7 +40,7 @@ export default function AdminDashboard() {
           { to: '/admin/subjects', label: 'Manage Subjects', desc: 'Subject codes and types' },
         ].map(item => (
           <Link key={item.to} to={item.to}
-            className="bg-white border border-gray-200 rounded-xl p-4 hover:border-indigo-300 hover:shadow-md transition-all flex items-center justify-between group">
+            className="bg-zinc-50 border border-gray-200 rounded-xl p-4 hover:border-indigo-300 hover:shadow-md transition-all flex items-center justify-between group">
             <div>
               <div className="font-semibold text-gray-900">{item.label}</div>
               <div className="text-sm text-gray-500 mt-0.5">{item.desc}</div>
