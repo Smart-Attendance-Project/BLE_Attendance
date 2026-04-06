@@ -6,23 +6,27 @@ export function Nav() {
   const { user, logout } = useAuth()
   const nav = useNavigate()
   const loc = useLocation()
-
   const handleLogout = () => { logout(); nav('/login') }
 
   const link = (to: string, label: string, Icon: React.ElementType) => {
-    const active = loc.pathname === to || loc.pathname.startsWith(to + '/')
+    // exact match for dashboard, prefix match for others
+    const active = to === '/teacher' || to === '/admin'
+      ? loc.pathname === to
+      : loc.pathname.startsWith(to)
     return (
-      <Link to={to} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${active ? 'bg-indigo-700 text-white' : 'text-indigo-200 hover:bg-indigo-700/60 hover:text-white'}`}>
-        <Icon size={16} />{label}
+      <Link to={to} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${active ? 'bg-white/20 text-white' : 'text-white/60 hover:bg-white/10 hover:text-white'}`}>
+        <Icon size={15} />{label}
       </Link>
     )
   }
 
   return (
-    <nav className="bg-indigo-900 text-white px-4 py-3 flex items-center gap-2 shadow-lg">
-      <div className="flex items-center gap-2 mr-4">
-        <GraduationCap size={22} className="text-indigo-300" />
-        <span className="font-bold text-base tracking-tight">BLE Attendance</span>
+    <nav className="bg-zinc-900 border-b-2 border-black text-white px-5 py-3 flex items-center gap-2 shadow-[0_4px_0_0_#000]">
+      <div className="flex items-center gap-2 mr-5">
+        <div className="bg-yellow-400 text-black p-1 rounded border-2 border-black">
+          <GraduationCap size={18} />
+        </div>
+        <span className="font-black text-base tracking-tight">BLE Attendance</span>
       </div>
 
       {user?.role === 'teacher' && <>
@@ -42,9 +46,9 @@ export function Nav() {
 
       {user && (
         <div className="ml-auto flex items-center gap-3">
-          <span className="text-indigo-300 text-sm">{user.full_name}</span>
-          <button onClick={handleLogout} className="flex items-center gap-1.5 text-sm text-indigo-200 hover:text-white transition-colors">
-            <LogOut size={15} /> Logout
+          <span className="text-white/50 text-sm hidden sm:block">{user.full_name}</span>
+          <button onClick={handleLogout} className="flex items-center gap-1.5 text-sm bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg transition-colors">
+            <LogOut size={14} /> Logout
           </button>
         </div>
       )}

@@ -1,54 +1,59 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { getTodaySchedule } from '../../api/endpoints'
-import { Clock, MapPin, Users, ChevronRight } from 'lucide-react'
+import { Clock, MapPin, Users, ArrowRight } from 'lucide-react'
 
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
 
 export default function TeacherDashboard() {
   const { data: slots = [], isLoading } = useQuery({ queryKey: ['today-schedule'], queryFn: getTodaySchedule })
   const today = new Date()
-  const dayName = DAYS[today.getDay() === 0 ? 6 : today.getDay() - 1]
+  const dayIdx = today.getDay() === 0 ? 6 : today.getDay() - 1
+  const dayName = DAYS[dayIdx]
   const dateStr = today.toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' })
 
   return (
-    <div className="p-6 max-w-3xl mx-auto">
+    <div className="p-6 max-w-4xl mx-auto">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Today's Schedule</h1>
-        <p className="text-gray-500 text-sm mt-1">{dayName}, {dateStr}</p>
+        <h1 className="text-2xl font-black text-zinc-900">Today's Schedule</h1>
+        <p className="text-zinc-500 text-sm mt-1">{dayName}, {dateStr}</p>
       </div>
 
       {isLoading && (
-        <div className="flex gap-3 flex-col">
-          {[1,2,3].map(i => <div key={i} className="h-24 bg-gray-100 rounded-xl animate-pulse" />)}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {[1,2,3].map(i => <div key={i} className="h-32 bg-zinc-100 rounded-xl border-2 border-zinc-200 animate-pulse" />)}
         </div>
       )}
 
       {!isLoading && slots.length === 0 && (
-        <div className="text-center py-16 text-gray-400">
-          <Clock size={40} className="mx-auto mb-3 opacity-40" />
-          <p className="font-medium">No classes scheduled today</p>
+        <div className="border-2 border-dashed border-zinc-300 rounded-xl py-16 text-center text-zinc-400">
+          <Clock size={36} className="mx-auto mb-3 opacity-40" />
+          <p className="font-semibold">No classes scheduled today</p>
         </div>
       )}
 
-      <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {slots.map((slot: any) => (
           <Link key={slot.id} to={`/teacher/sessions?assignment_id=${slot.assignment_id}`}
-            className="group bg-white border border-gray-200 rounded-xl p-4 hover:border-indigo-300 hover:shadow-md transition-all flex items-center gap-4">
-            <div className="bg-indigo-50 text-indigo-700 rounded-lg px-3 py-2 text-center min-w-[72px]">
-              <div className="text-xs font-medium">{slot.time_start}</div>
-              <div className="text-xs text-indigo-400">–</div>
-              <div className="text-xs font-medium">{slot.time_end}</div>
+            className="group bg-white border-2 border-black rounded-xl p-4 shadow-[4px_4px_0_0_#000] hover:shadow-[2px_2px_0_0_#000] hover:translate-x-0.5 hover:translate-y-0.5 transition-all">
+            <div className="flex items-start justify-between mb-3">
+              <span className="bg-yellow-400 border border-black text-black text-xs font-bold px-2 py-0.5 rounded">
+                {slot.time_start}–{slot.time_end}
+              </span>
+              <ArrowRight size={16} className="text-zinc-300 group-hover:text-black transition-colors mt-0.5" />
             </div>
-            <div className="flex-1 min-w-0">
-              <div className="font-semibold text-gray-900 truncate">{slot.subject_name}</div>
-              <div className="text-xs text-gray-500 mt-0.5 font-mono">{slot.subject_code}</div>
-              <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-500">
-                <span className="flex items-center gap-1"><Users size={11} />{slot.division_label}{slot.batch_label ? ` · Batch ${slot.batch_label}` : ''}</span>
-                {slot.room && <span className="flex items-center gap-1"><MapPin size={11} />{slot.room}</span>}
-              </div>
+            <div className="font-black text-zinc-900 leading-tight">{slot.subject_name}</div>
+            <div className="font-mono text-xs text-zinc-400 mt-0.5">{slot.subject_code}</div>
+            <div className="flex flex-wrap gap-2 mt-3">
+              <span className="flex items-center gap-1 text-xs text-zinc-600 bg-zinc-100 px-2 py-0.5 rounded-full border border-zinc-200">
+                <Users size={10} />{slot.division_label}{slot.batch_label ? ` · ${slot.batch_label}` : ''}
+              </span>
+              {slot.room && (
+                <span className="flex items-center gap-1 text-xs text-zinc-600 bg-zinc-100 px-2 py-0.5 rounded-full border border-zinc-200">
+                  <MapPin size={10} />{slot.room}
+                </span>
+              )}
             </div>
-            <ChevronRight size={18} className="text-gray-300 group-hover:text-indigo-400 transition-colors" />
           </Link>
         ))}
       </div>
