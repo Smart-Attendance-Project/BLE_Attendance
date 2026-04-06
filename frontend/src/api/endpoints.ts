@@ -9,6 +9,7 @@ export const getMe = () => api.get('/auth/me').then(r => r.data)
 // Teacher
 export const getTodaySchedule = () => api.get('/teacher/me/schedule/today').then(r => r.data)
 export const getMyAssignments = () => api.get('/teacher/me/assignments').then(r => r.data)
+export const getMyDivisions = () => api.get('/teacher/me/divisions').then(r => r.data)
 export const getMySessions = (params?: Record<string, string | number>) =>
   api.get('/teacher/me/sessions', { params }).then(r => r.data)
 

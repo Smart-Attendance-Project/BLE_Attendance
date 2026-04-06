@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getMyAssignments, exportAttendance } from '../../api/endpoints'
+import { Download, Calendar } from 'lucide-react'
 
 export default function Export() {
   const { data: assignments = [] } = useQuery({ queryKey: ['my-assignments'], queryFn: getMyAssignments })
@@ -19,7 +20,7 @@ export default function Export() {
   ]
 
   const doExport = async () => {
-    if (!assignmentId || !fromDate || !toDate) { setErr('Fill all fields'); return }
+    if (!assignmentId || !fromDate || !toDate) { setErr('Please fill all fields'); return }
     setErr('')
     setLoading(true)
     try {
@@ -31,51 +32,68 @@ export default function Export() {
       a.click()
       URL.revokeObjectURL(url)
     } catch {
-      setErr('Export failed')
+      setErr('Export failed. No sessions may exist for this range.')
     } finally {
       setLoading(false)
     }
   }
 
+  const selected = assignments.find((a: any) => String(a.id) === assignmentId)
+
   return (
-    <div style={{ padding: 24, maxWidth: 600 }}>
-      <h2>Export Attendance</h2>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div className="p-6 max-w-2xl mx-auto">
+      <h1 className="text-2xl font-bold text-gray-900 mb-6">Export Attendance</h1>
+
+      <div className="bg-white border border-gray-200 rounded-xl p-6 flex flex-col gap-5">
         <div>
-          <label>Class / Subject</label>
-          <select value={assignmentId} onChange={e => setAssignmentId(e.target.value)} style={{ display: 'block', width: '100%', padding: 8, marginTop: 4 }}>
-            <option value="">— Select —</option>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Class / Subject</label>
+          <select value={assignmentId} onChange={e => setAssignmentId(e.target.value)}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+            <option value="">— Select a class —</option>
             {assignments.map((a: any) => (
               <option key={a.id} value={a.id}>
-                {a.subject_name} · {a.division_label}{a.batch_label ? ` · ${a.batch_label}` : ''}
+                {a.subject_name} · {a.division_label}{a.batch_label ? ` · Batch ${a.batch_label}` : ''}
               </option>
             ))}
           </select>
+          {selected && (
+            <p className="text-xs text-gray-500 mt-1.5 font-mono">{selected.subject_code} · {selected.subject_type === 'lab' ? 'Lab' : 'Lecture'}</p>
+          )}
         </div>
 
-        <div style={{ display: 'flex', gap: 8 }}>
-          {presets.map(p => (
-            <button key={p.label} onClick={() => { setFromDate(p.from); setToDate(p.to) }}
-              style={{ padding: '4px 12px', cursor: 'pointer', background: fromDate === p.from && toDate === p.to ? '#0070f3' : '#eee', color: fromDate === p.from && toDate === p.to ? '#fff' : '#333', border: 'none', borderRadius: 4 }}>
-              {p.label}
-            </button>
-          ))}
-        </div>
-
-        <div style={{ display: 'flex', gap: 12 }}>
-          <div style={{ flex: 1 }}>
-            <label>From</label>
-            <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} style={{ display: 'block', width: '100%', padding: 8, marginTop: 4 }} />
-          </div>
-          <div style={{ flex: 1 }}>
-            <label>To</label>
-            <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} style={{ display: 'block', width: '100%', padding: 8, marginTop: 4 }} />
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Quick select</label>
+          <div className="flex gap-2">
+            {presets.map(p => {
+              const active = fromDate === p.from && toDate === p.to
+              return (
+                <button key={p.label} onClick={() => { setFromDate(p.from); setToDate(p.to) }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${active ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-300 hover:border-indigo-300'}`}>
+                  <Calendar size={13} />{p.label}
+                </button>
+              )
+            })}
           </div>
         </div>
 
-        {err && <span style={{ color: 'red' }}>{err}</span>}
-        <button onClick={doExport} disabled={loading} style={{ padding: '10px 20px', background: '#0070f3', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 15 }}>
-          {loading ? 'Exporting…' : '⬇ Download Excel'}
+        <div className="flex gap-4">
+          <div className="flex-1">
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">From</label>
+            <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+          </div>
+          <div className="flex-1">
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">To</label>
+            <input type="date" value={toDate} onChange={e => setToDate(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+          </div>
+        </div>
+
+        {err && <p className="text-red-600 text-sm bg-red-50 border border-red-200 rounded-lg px-3 py-2">{err}</p>}
+
+        <button onClick={doExport} disabled={loading}
+          className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold py-3 rounded-xl transition-colors">
+          <Download size={18} />{loading ? 'Exporting…' : 'Download Excel'}
         </button>
       </div>
     </div>
@@ -86,7 +104,7 @@ function getMondayOfWeek() {
   const d = new Date()
   const day = d.getDay()
   const diff = d.getDate() - day + (day === 0 ? -6 : 1)
-  return new Date(d.setDate(diff)).toISOString().split('T')[0]
+  return new Date(new Date().setDate(diff)).toISOString().split('T')[0]
 }
 
 function getMonthStart() {

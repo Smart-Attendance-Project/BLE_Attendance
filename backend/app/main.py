@@ -415,9 +415,28 @@ def teacher_add_student(payload: CreateStudentIn, db: Session = Depends(get_db),
                    student_id=student.student_id)
 
 
+@app.get("/teacher/me/divisions")
+def teacher_divisions(db: Session = Depends(get_db),
+                      teacher: User = Depends(require_role(UserRole.teacher))):
+    """Return only divisions this teacher has assignments in."""
+    rows = db.execute(
+        select(Division).join(TeacherAssignment, TeacherAssignment.division_id == Division.id)
+        .where(TeacherAssignment.teacher_user_id == teacher.id)
+        .distinct()
+    ).scalars().all()
+    return [_div_out(d) for d in rows]
+
+
 @app.get("/teacher/divisions/{division_id}/students")
 def get_division_students(division_id: int, db: Session = Depends(get_db),
-                          _: User = Depends(require_role(UserRole.teacher))):
+                          teacher: User = Depends(require_role(UserRole.teacher))):
+    # Verify teacher has at least one assignment in this division
+    has_access = db.scalar(select(TeacherAssignment).where(
+        and_(TeacherAssignment.teacher_user_id == teacher.id,
+             TeacherAssignment.division_id == division_id)
+    ))
+    if not has_access:
+        raise HTTPException(status_code=403, detail="No assignment in this division")
     rows = db.execute(
         select(User, DivisionStudent)
         .join(DivisionStudent, DivisionStudent.student_user_id == User.id)

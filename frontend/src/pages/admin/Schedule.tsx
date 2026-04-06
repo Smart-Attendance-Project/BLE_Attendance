@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Trash2, Plus } from 'lucide-react'
 import {
   listSemesters, createSemester, activateSemester,
   listBranches, createBranch,
@@ -12,18 +13,19 @@ import {
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const TIME_SLOTS = ['09:10', '10:10', '11:10', '12:10', '13:10', '14:20', '15:20']
-const TIME_ENDS:  Record<string, string> = {
+const TIME_ENDS: Record<string, string> = {
   '09:10': '10:10', '10:10': '11:10', '11:10': '12:10',
   '12:10': '13:10', '13:10': '14:10', '14:20': '15:20', '15:20': '16:20',
 }
+type Tab = 'semesters' | 'branches' | 'assignments' | 'timetable'
 
-type Tab = 'semesters' | 'branches' | 'assignments' | 'slots'
+const inp = "border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+const btn = "bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
 
 export default function Schedule() {
   const qc = useQueryClient()
   const [tab, setTab] = useState<Tab>('semesters')
 
-  // Data
   const { data: semesters = [] } = useQuery({ queryKey: ['semesters'], queryFn: listSemesters })
   const { data: branches = [] } = useQuery({ queryKey: ['branches'], queryFn: listBranches })
   const { data: divisions = [] } = useQuery({ queryKey: ['divisions'], queryFn: () => listDivisions() })
@@ -38,29 +40,29 @@ export default function Schedule() {
     enabled: !!activeSem,
   })
 
-  // Semester form
+  // Semester
   const [semForm, setSemForm] = useState({ name: '', start_date: '', end_date: '', is_active: false })
   const semMut = useMutation({ mutationFn: () => createSemester(semForm), onSuccess: () => { qc.invalidateQueries({ queryKey: ['semesters'] }); setSemForm({ name: '', start_date: '', end_date: '', is_active: false }) } })
   const activateMut = useMutation({ mutationFn: (id: number) => activateSemester(id), onSuccess: () => qc.invalidateQueries({ queryKey: ['semesters'] }) })
 
-  // Branch form
+  // Branch
   const [branchForm, setBranchForm] = useState({ code: '', name: '' })
   const branchMut = useMutation({ mutationFn: () => createBranch(branchForm), onSuccess: () => { qc.invalidateQueries({ queryKey: ['branches'] }); setBranchForm({ code: '', name: '' }) } })
 
-  // Division form
+  // Division
   const [divForm, setDivForm] = useState({ branch_id: '', year: '1', div_number: '1', label: '' })
   const divMut = useMutation({
     mutationFn: () => createDivision({ branch_id: Number(divForm.branch_id), year: Number(divForm.year), div_number: Number(divForm.div_number), label: divForm.label }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['divisions'] }); setDivForm({ branch_id: '', year: '1', div_number: '1', label: '' }) },
   })
 
-  // Batch form
+  // Batch
   const [batchDivId, setBatchDivId] = useState('')
   const { data: batchesForDiv = [] } = useQuery({ queryKey: ['batches', batchDivId], queryFn: () => listBatches(Number(batchDivId)), enabled: !!batchDivId })
   const [batchLabel, setBatchLabel] = useState('')
   const batchMut = useMutation({ mutationFn: () => createBatch({ division_id: Number(batchDivId), label: batchLabel }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['batches', batchDivId] }); setBatchLabel('') } })
 
-  // Assignment form
+  // Assignment
   const [aForm, setAForm] = useState({ teacher_user_id: '', subject_id: '', division_id: '', batch_id: '' })
   const { data: batchesForAssign = [] } = useQuery({ queryKey: ['batches', aForm.division_id], queryFn: () => listBatches(Number(aForm.division_id)), enabled: !!aForm.division_id })
   const assignMut = useMutation({
@@ -69,7 +71,7 @@ export default function Schedule() {
   })
   const delAssignMut = useMutation({ mutationFn: (id: number) => deleteAssignment(id), onSuccess: () => qc.invalidateQueries({ queryKey: ['assignments'] }) })
 
-  // Slot form
+  // Slot
   const [slotForm, setSlotForm] = useState({ assignment_id: '', day_of_week: '0', time_start: '09:10', room: '' })
   const slotMut = useMutation({
     mutationFn: () => createSlot({ assignment_id: Number(slotForm.assignment_id), semester_id: activeSem?.id, day_of_week: Number(slotForm.day_of_week), time_start: slotForm.time_start, time_end: TIME_ENDS[slotForm.time_start] || '10:10', room: slotForm.room }),
@@ -77,188 +79,214 @@ export default function Schedule() {
   })
   const delSlotMut = useMutation({ mutationFn: (id: number) => deleteSlot(id), onSuccess: () => qc.invalidateQueries({ queryKey: ['slots', activeSem?.id] }) })
 
-  const tabStyle = (t: Tab) => ({ padding: '8px 16px', cursor: 'pointer', borderBottom: tab === t ? '2px solid #0070f3' : '2px solid transparent', background: 'none', border: 'none', borderBottom: tab === t ? '2px solid #0070f3' : '2px solid transparent', fontWeight: tab === t ? 700 : 400 } as React.CSSProperties)
+  const tabs: { key: Tab; label: string }[] = [
+    { key: 'semesters', label: 'Semesters' },
+    { key: 'branches', label: 'Branches & Divisions' },
+    { key: 'assignments', label: 'Assignments' },
+    { key: 'timetable', label: 'Timetable' },
+  ]
 
   return (
-    <div style={{ padding: 24 }}>
-      <h2>Schedule Management</h2>
-      <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '1px solid #ddd' }}>
-        {(['semesters', 'branches', 'assignments', 'slots'] as Tab[]).map(t => (
-          <button key={t} style={tabStyle(t)} onClick={() => setTab(t)}>{t.charAt(0).toUpperCase() + t.slice(1)}</button>
+    <div className="p-6 max-w-6xl mx-auto">
+      <h1 className="text-2xl font-bold text-gray-900 mb-6">Schedule Management</h1>
+
+      <div className="flex gap-1 mb-6 border-b border-gray-200">
+        {tabs.map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${tab === t.key ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+            {t.label}
+          </button>
         ))}
       </div>
 
+      {/* ── Semesters ── */}
       {tab === 'semesters' && (
-        <div>
-          <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, maxWidth: 460, marginBottom: 20 }}>
-            <h4 style={{ margin: '0 0 10px' }}>Add Semester</h4>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <input placeholder="Name (e.g. Sem II 2025-26)" value={semForm.name} onChange={e => setSemForm(f => ({ ...f, name: e.target.value }))} />
-              <div style={{ display: 'flex', gap: 8 }}>
-                <input type="date" value={semForm.start_date} onChange={e => setSemForm(f => ({ ...f, start_date: e.target.value }))} style={{ flex: 1 }} />
-                <input type="date" value={semForm.end_date} onChange={e => setSemForm(f => ({ ...f, end_date: e.target.value }))} style={{ flex: 1 }} />
+        <div className="max-w-2xl">
+          <div className="bg-white border border-gray-200 rounded-xl p-5 mb-5">
+            <h3 className="font-semibold text-gray-800 mb-4">Add Semester</h3>
+            <div className="flex flex-col gap-3">
+              <input className={inp} placeholder="Name (e.g. Sem II 2025-26)" value={semForm.name} onChange={e => setSemForm(f => ({ ...f, name: e.target.value }))} />
+              <div className="flex gap-3">
+                <input type="date" className={`${inp} flex-1`} value={semForm.start_date} onChange={e => setSemForm(f => ({ ...f, start_date: e.target.value }))} />
+                <input type="date" className={`${inp} flex-1`} value={semForm.end_date} onChange={e => setSemForm(f => ({ ...f, end_date: e.target.value }))} />
               </div>
-              <label style={{ display: 'flex', gap: 8 }}><input type="checkbox" checked={semForm.is_active} onChange={e => setSemForm(f => ({ ...f, is_active: e.target.checked }))} /> Set as active</label>
-              <button onClick={() => semMut.mutate()} disabled={!semForm.name}>Add</button>
+              <div className="flex items-center justify-between">
+                <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                  <input type="checkbox" checked={semForm.is_active} onChange={e => setSemForm(f => ({ ...f, is_active: e.target.checked }))} />
+                  Set as active semester
+                </label>
+                <button className={btn} onClick={() => semMut.mutate()} disabled={!semForm.name}>Add</button>
+              </div>
             </div>
           </div>
-          <table style={{ borderCollapse: 'collapse', fontSize: 14 }}>
-            <thead><tr style={{ background: '#f5f5f5' }}>{['Name', 'Start', 'End', 'Active', ''].map(h => <th key={h} style={{ padding: '8px 12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>{h}</th>)}</tr></thead>
-            <tbody>
-              {semesters.map((s: any) => (
-                <tr key={s.id}>
-                  <td style={{ padding: '6px 12px' }}>{s.name}</td>
-                  <td style={{ padding: '6px 12px' }}>{s.start_date}</td>
-                  <td style={{ padding: '6px 12px' }}>{s.end_date}</td>
-                  <td style={{ padding: '6px 12px' }}>{s.is_active ? '✓' : ''}</td>
-                  <td style={{ padding: '6px 12px' }}>{!s.is_active && <button onClick={() => activateMut.mutate(s.id)} style={{ fontSize: 12 }}>Activate</button>}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+            <table className="w-full text-sm">
+              <thead><tr className="bg-gray-50 border-b border-gray-200">{['Name','Start','End','Status',''].map(h=><th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}</tr></thead>
+              <tbody className="divide-y divide-gray-100">
+                {semesters.map((s: any) => (
+                  <tr key={s.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-2.5 font-medium text-gray-900">{s.name}</td>
+                    <td className="px-4 py-2.5 text-gray-600">{s.start_date}</td>
+                    <td className="px-4 py-2.5 text-gray-600">{s.end_date}</td>
+                    <td className="px-4 py-2.5">{s.is_active ? <span className="bg-green-100 text-green-700 text-xs font-medium px-2 py-0.5 rounded-full">Active</span> : <span className="text-gray-400 text-xs">Inactive</span>}</td>
+                    <td className="px-4 py-2.5">{!s.is_active && <button onClick={() => activateMut.mutate(s.id)} className="text-xs text-indigo-600 hover:underline">Activate</button>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
+      {/* ── Branches & Divisions ── */}
       {tab === 'branches' && (
-        <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
-          <div>
-            <h4>Branches</h4>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-              <input placeholder="Code (CE)" value={branchForm.code} onChange={e => setBranchForm(f => ({ ...f, code: e.target.value }))} style={{ width: 80 }} />
-              <input placeholder="Name" value={branchForm.name} onChange={e => setBranchForm(f => ({ ...f, name: e.target.value }))} />
-              <button onClick={() => branchMut.mutate()}>Add</button>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="bg-white border border-gray-200 rounded-xl p-5">
+            <h3 className="font-semibold text-gray-800 mb-4">Branches</h3>
+            <div className="flex gap-2 mb-4">
+              <input className={`${inp} w-20`} placeholder="Code" value={branchForm.code} onChange={e => setBranchForm(f => ({ ...f, code: e.target.value }))} />
+              <input className={`${inp} flex-1`} placeholder="Name" value={branchForm.name} onChange={e => setBranchForm(f => ({ ...f, name: e.target.value }))} />
+              <button className={btn} onClick={() => branchMut.mutate()}>+</button>
             </div>
-            <table style={{ borderCollapse: 'collapse', fontSize: 14 }}>
-              <thead><tr style={{ background: '#f5f5f5' }}>{['Code', 'Name'].map(h => <th key={h} style={{ padding: '6px 12px', borderBottom: '1px solid #ddd' }}>{h}</th>)}</tr></thead>
-              <tbody>{branches.map((b: any) => <tr key={b.id}><td style={{ padding: '5px 12px' }}>{b.code}</td><td style={{ padding: '5px 12px' }}>{b.name}</td></tr>)}</tbody>
-            </table>
+            <div className="flex flex-col gap-1">
+              {branches.map((b: any) => <div key={b.id} className="flex items-center justify-between py-1.5 px-2 rounded-lg hover:bg-gray-50 text-sm"><span className="font-mono text-xs text-gray-500 w-12">{b.code}</span><span className="text-gray-700">{b.name}</span></div>)}
+            </div>
           </div>
 
-          <div>
-            <h4>Divisions</h4>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-              <select value={divForm.branch_id} onChange={e => setDivForm(f => ({ ...f, branch_id: e.target.value }))} style={{ padding: 6 }}>
+          <div className="bg-white border border-gray-200 rounded-xl p-5">
+            <h3 className="font-semibold text-gray-800 mb-4">Divisions</h3>
+            <div className="flex flex-col gap-2 mb-4">
+              <select className={inp} value={divForm.branch_id} onChange={e => setDivForm(f => ({ ...f, branch_id: e.target.value }))}>
                 <option value="">Branch</option>
                 {branches.map((b: any) => <option key={b.id} value={b.id}>{b.code}</option>)}
               </select>
-              <select value={divForm.year} onChange={e => setDivForm(f => ({ ...f, year: e.target.value }))} style={{ padding: 6 }}>
-                {[1,2,3,4].map(y => <option key={y} value={y}>Year {y}</option>)}
-              </select>
-              <input placeholder="Div #" value={divForm.div_number} onChange={e => setDivForm(f => ({ ...f, div_number: e.target.value }))} style={{ width: 60 }} />
-              <input placeholder="Label (CE-FY-Div1)" value={divForm.label} onChange={e => setDivForm(f => ({ ...f, label: e.target.value }))} style={{ width: 140 }} />
-              <button onClick={() => divMut.mutate()}>Add</button>
+              <div className="flex gap-2">
+                <select className={`${inp} flex-1`} value={divForm.year} onChange={e => setDivForm(f => ({ ...f, year: e.target.value }))}>
+                  {[1,2,3,4].map(y => <option key={y} value={y}>Year {y}</option>)}
+                </select>
+                <input className={`${inp} w-16`} placeholder="Div#" value={divForm.div_number} onChange={e => setDivForm(f => ({ ...f, div_number: e.target.value }))} />
+              </div>
+              <div className="flex gap-2">
+                <input className={`${inp} flex-1`} placeholder="Label (CE-FY-Div1)" value={divForm.label} onChange={e => setDivForm(f => ({ ...f, label: e.target.value }))} />
+                <button className={btn} onClick={() => divMut.mutate()}>+</button>
+              </div>
             </div>
-            <table style={{ borderCollapse: 'collapse', fontSize: 14 }}>
-              <thead><tr style={{ background: '#f5f5f5' }}>{['Label', 'Year', 'Div'].map(h => <th key={h} style={{ padding: '6px 12px', borderBottom: '1px solid #ddd' }}>{h}</th>)}</tr></thead>
-              <tbody>{divisions.map((d: any) => <tr key={d.id}><td style={{ padding: '5px 12px' }}>{d.label}</td><td style={{ padding: '5px 12px' }}>{d.year}</td><td style={{ padding: '5px 12px' }}>{d.div_number}</td></tr>)}</tbody>
-            </table>
+            <div className="flex flex-col gap-1">
+              {divisions.map((d: any) => <div key={d.id} className="py-1.5 px-2 rounded-lg hover:bg-gray-50 text-sm text-gray-700">{d.label}</div>)}
+            </div>
           </div>
 
-          <div>
-            <h4>Batches</h4>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-              <select value={batchDivId} onChange={e => setBatchDivId(e.target.value)} style={{ padding: 6 }}>
+          <div className="bg-white border border-gray-200 rounded-xl p-5">
+            <h3 className="font-semibold text-gray-800 mb-4">Batches</h3>
+            <div className="flex flex-col gap-2 mb-4">
+              <select className={inp} value={batchDivId} onChange={e => setBatchDivId(e.target.value)}>
                 <option value="">Division</option>
                 {divisions.map((d: any) => <option key={d.id} value={d.id}>{d.label}</option>)}
               </select>
-              <input placeholder="Label (A1)" value={batchLabel} onChange={e => setBatchLabel(e.target.value)} style={{ width: 80 }} />
-              <button onClick={() => batchMut.mutate()} disabled={!batchDivId || !batchLabel}>Add</button>
+              <div className="flex gap-2">
+                <input className={`${inp} flex-1`} placeholder="Label (A1)" value={batchLabel} onChange={e => setBatchLabel(e.target.value)} />
+                <button className={btn} onClick={() => batchMut.mutate()} disabled={!batchDivId || !batchLabel}>+</button>
+              </div>
             </div>
-            {batchDivId && <div style={{ fontSize: 13 }}>{batchesForDiv.map((b: any) => <span key={b.id} style={{ marginRight: 8, padding: '2px 8px', background: '#eee', borderRadius: 4 }}>{b.label}</span>)}</div>}
+            {batchDivId && <div className="flex flex-wrap gap-2">{batchesForDiv.map((b: any) => <span key={b.id} className="bg-indigo-50 text-indigo-700 text-xs font-medium px-2.5 py-1 rounded-full">{b.label}</span>)}</div>}
           </div>
         </div>
       )}
 
+      {/* ── Assignments ── */}
       {tab === 'assignments' && (
         <div>
-          <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, maxWidth: 560, marginBottom: 20 }}>
-            <h4 style={{ margin: '0 0 10px' }}>Assign Teacher to Subject+Division</h4>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <select value={aForm.teacher_user_id} onChange={e => setAForm(f => ({ ...f, teacher_user_id: e.target.value }))} style={{ padding: 6 }}>
+          <div className="bg-white border border-gray-200 rounded-xl p-5 mb-5 max-w-2xl">
+            <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2"><Plus size={15} />Assign Teacher to Subject + Division</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <select className={inp} value={aForm.teacher_user_id} onChange={e => setAForm(f => ({ ...f, teacher_user_id: e.target.value }))}>
                 <option value="">Teacher</option>
                 {teachers.map((t: any) => <option key={t.id} value={t.id}>{t.full_name} ({t.teacher_id})</option>)}
               </select>
-              <select value={aForm.subject_id} onChange={e => setAForm(f => ({ ...f, subject_id: e.target.value }))} style={{ padding: 6 }}>
+              <select className={inp} value={aForm.subject_id} onChange={e => setAForm(f => ({ ...f, subject_id: e.target.value }))}>
                 <option value="">Subject</option>
                 {subjects.map((s: any) => <option key={s.id} value={s.id}>{s.code} — {s.name}</option>)}
               </select>
-              <select value={aForm.division_id} onChange={e => setAForm(f => ({ ...f, division_id: e.target.value, batch_id: '' }))} style={{ padding: 6 }}>
+              <select className={inp} value={aForm.division_id} onChange={e => setAForm(f => ({ ...f, division_id: e.target.value, batch_id: '' }))}>
                 <option value="">Division</option>
                 {divisions.map((d: any) => <option key={d.id} value={d.id}>{d.label}</option>)}
               </select>
-              {aForm.division_id && (
-                <select value={aForm.batch_id} onChange={e => setAForm(f => ({ ...f, batch_id: e.target.value }))} style={{ padding: 6 }}>
-                  <option value="">No batch (lecture)</option>
-                  {batchesForAssign.map((b: any) => <option key={b.id} value={b.id}>{b.label}</option>)}
-                </select>
-              )}
-              <button onClick={() => assignMut.mutate()} disabled={!aForm.teacher_user_id || !aForm.subject_id || !aForm.division_id}>Assign</button>
+              <select className={inp} value={aForm.batch_id} onChange={e => setAForm(f => ({ ...f, batch_id: e.target.value }))} disabled={!aForm.division_id}>
+                <option value="">No batch (lecture)</option>
+                {batchesForAssign.map((b: any) => <option key={b.id} value={b.id}>{b.label}</option>)}
+              </select>
             </div>
+            <button className={`${btn} mt-3`} onClick={() => assignMut.mutate()} disabled={!aForm.teacher_user_id || !aForm.subject_id || !aForm.division_id}>Assign</button>
           </div>
-          <table style={{ borderCollapse: 'collapse', fontSize: 14 }}>
-            <thead><tr style={{ background: '#f5f5f5' }}>{['Teacher', 'Subject', 'Division', 'Batch', ''].map(h => <th key={h} style={{ padding: '8px 12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>{h}</th>)}</tr></thead>
-            <tbody>
-              {assignments.map((a: any) => (
-                <tr key={a.id}>
-                  <td style={{ padding: '6px 12px' }}>{a.teacher_name}</td>
-                  <td style={{ padding: '6px 12px' }}>{a.subject_code}</td>
-                  <td style={{ padding: '6px 12px' }}>{a.division_label}</td>
-                  <td style={{ padding: '6px 12px' }}>{a.batch_label || '—'}</td>
-                  <td style={{ padding: '6px 12px' }}><button onClick={() => delAssignMut.mutate(a.id)} style={{ color: 'red', fontSize: 12 }}>Delete</button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+            <table className="w-full text-sm">
+              <thead><tr className="bg-gray-50 border-b border-gray-200">{['Teacher','Subject','Division','Batch',''].map(h=><th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}</tr></thead>
+              <tbody className="divide-y divide-gray-100">
+                {assignments.map((a: any) => (
+                  <tr key={a.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-2.5 text-gray-900">{a.teacher_name}</td>
+                    <td className="px-4 py-2.5 font-mono text-xs text-gray-600">{a.subject_code}</td>
+                    <td className="px-4 py-2.5 text-gray-600">{a.division_label}</td>
+                    <td className="px-4 py-2.5">{a.batch_label ? <span className="bg-indigo-50 text-indigo-700 text-xs font-medium px-2 py-0.5 rounded-full">{a.batch_label}</span> : <span className="text-gray-400">—</span>}</td>
+                    <td className="px-4 py-2.5"><button onClick={() => delAssignMut.mutate(a.id)} className="text-red-400 hover:text-red-600 transition-colors"><Trash2 size={14} /></button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
-      {tab === 'slots' && (
+      {/* ── Timetable ── */}
+      {tab === 'timetable' && (
         <div>
-          {!activeSem && <p style={{ color: 'orange' }}>No active semester. Activate one first.</p>}
-          {activeSem && (
-            <>
-              <p style={{ color: '#555', marginBottom: 12 }}>Active semester: <strong>{activeSem.name}</strong></p>
-              <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, maxWidth: 560, marginBottom: 20 }}>
-                <h4 style={{ margin: '0 0 10px' }}>Add Schedule Slot</h4>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <select value={slotForm.assignment_id} onChange={e => setSlotForm(f => ({ ...f, assignment_id: e.target.value }))} style={{ padding: 6 }}>
+          {!activeSem
+            ? <div className="bg-orange-50 border border-orange-200 text-orange-700 rounded-xl px-4 py-3 text-sm">No active semester. Go to Semesters tab and activate one.</div>
+            : <>
+              <div className="flex items-center justify-between mb-4">
+                <p className="text-sm text-gray-600">Active: <strong>{activeSem.name}</strong></p>
+              </div>
+              <div className="bg-white border border-gray-200 rounded-xl p-4 mb-5">
+                <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2"><Plus size={15} />Add Slot</h3>
+                <div className="flex gap-3 flex-wrap items-end">
+                  <select className={inp} value={slotForm.assignment_id} onChange={e => setSlotForm(f => ({ ...f, assignment_id: e.target.value }))}>
                     <option value="">Assignment</option>
                     {assignments.map((a: any) => <option key={a.id} value={a.id}>{a.teacher_name} · {a.subject_code} · {a.division_label}{a.batch_label ? ` · ${a.batch_label}` : ''}</option>)}
                   </select>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <select value={slotForm.day_of_week} onChange={e => setSlotForm(f => ({ ...f, day_of_week: e.target.value }))} style={{ padding: 6, flex: 1 }}>
-                      {DAYS.map((d, i) => <option key={i} value={i}>{d}</option>)}
-                    </select>
-                    <select value={slotForm.time_start} onChange={e => setSlotForm(f => ({ ...f, time_start: e.target.value }))} style={{ padding: 6, flex: 1 }}>
-                      {TIME_SLOTS.map(t => <option key={t} value={t}>{t}</option>)}
-                    </select>
-                    <input placeholder="Room" value={slotForm.room} onChange={e => setSlotForm(f => ({ ...f, room: e.target.value }))} style={{ width: 80 }} />
-                  </div>
-                  <button onClick={() => slotMut.mutate()} disabled={!slotForm.assignment_id}>Add Slot</button>
+                  <select className={inp} value={slotForm.day_of_week} onChange={e => setSlotForm(f => ({ ...f, day_of_week: e.target.value }))}>
+                    {DAYS.map((d, i) => <option key={i} value={i}>{d}</option>)}
+                  </select>
+                  <select className={inp} value={slotForm.time_start} onChange={e => setSlotForm(f => ({ ...f, time_start: e.target.value }))}>
+                    {TIME_SLOTS.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                  <input className={`${inp} w-24`} placeholder="Room" value={slotForm.room} onChange={e => setSlotForm(f => ({ ...f, room: e.target.value }))} />
+                  <button className={btn} onClick={() => slotMut.mutate()} disabled={!slotForm.assignment_id}>Add</button>
                 </div>
               </div>
-
-              {/* Timetable grid */}
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: 700 }}>
+              <div className="overflow-x-auto rounded-xl border border-gray-200">
+                <table className="w-full text-xs border-collapse">
                   <thead>
-                    <tr>
-                      <th style={{ padding: '6px 10px', border: '1px solid #ddd', background: '#f5f5f5' }}>Time</th>
-                      {DAYS.map(d => <th key={d} style={{ padding: '6px 10px', border: '1px solid #ddd', background: '#f5f5f5', minWidth: 100 }}>{d}</th>)}
+                    <tr className="bg-gray-50">
+                      <th className="px-3 py-2.5 text-left font-semibold text-gray-500 border-b border-r border-gray-200 w-20">Time</th>
+                      {DAYS.map(d => <th key={d} className="px-3 py-2.5 text-center font-semibold text-gray-500 border-b border-r border-gray-200 min-w-[120px]">{d}</th>)}
                     </tr>
                   </thead>
                   <tbody>
                     {TIME_SLOTS.map(ts => (
-                      <tr key={ts}>
-                        <td style={{ padding: '6px 10px', border: '1px solid #ddd', fontWeight: 600, whiteSpace: 'nowrap' }}>{ts}</td>
+                      <tr key={ts} className="border-b border-gray-100">
+                        <td className="px-3 py-2 font-medium text-gray-500 border-r border-gray-200 whitespace-nowrap bg-gray-50">{ts}</td>
                         {DAYS.map((_, di) => {
                           const daySlots = slots.filter((s: any) => s.day_of_week === di && s.time_start === ts)
                           return (
-                            <td key={di} style={{ padding: '4px 6px', border: '1px solid #ddd', verticalAlign: 'top' }}>
+                            <td key={di} className="px-2 py-1.5 border-r border-gray-100 align-top">
                               {daySlots.map((s: any) => (
-                                <div key={s.id} style={{ background: '#e8f4fd', borderRadius: 4, padding: '2px 6px', marginBottom: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                  <span>{s.subject_code}{s.batch_label ? ` (${s.batch_label})` : ''}</span>
-                                  <button onClick={() => delSlotMut.mutate(s.id)} style={{ background: 'none', border: 'none', color: 'red', cursor: 'pointer', fontSize: 11, padding: 0, marginLeft: 4 }}>✕</button>
+                                <div key={s.id} className="flex items-center justify-between gap-1 bg-indigo-50 border border-indigo-100 rounded px-1.5 py-1 mb-1">
+                                  <div>
+                                    <span className="font-semibold text-indigo-700">{s.subject_code}</span>
+                                    {s.batch_label && <span className="text-indigo-400 ml-1">({s.batch_label})</span>}
+                                    <div className="text-gray-400 truncate max-w-[90px]">{s.teacher_name.split(' ').slice(-1)[0]}</div>
+                                  </div>
+                                  <button onClick={() => delSlotMut.mutate(s.id)} className="text-red-300 hover:text-red-500 transition-colors shrink-0"><Trash2 size={11} /></button>
                                 </div>
                               ))}
                             </td>
@@ -270,7 +298,7 @@ export default function Schedule() {
                 </table>
               </div>
             </>
-          )}
+          }
         </div>
       )}
     </div>
