@@ -134,57 +134,77 @@ export default function Schedule() {
 
       {/* Branches & Divisions */}
       {tab === 'branches' && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="flex flex-col gap-6 max-w-2xl">
+          {/* Branches */}
           <div className="bg-zinc-50 border-2 border-black rounded-xl p-6 shadow-[4px_4px_0_0_#000]">
             <h3 className="font-black text-zinc-800 text-lg mb-4">Branches</h3>
             <div className="flex flex-col gap-3 mb-5">
               <div className="flex gap-3">
-                <input className={`${inp} w-24`} placeholder="Code" value={branchForm.code} onChange={e => setBranchForm(f => ({ ...f, code: e.target.value }))} />
-                <input className={`${inp} flex-1`} placeholder="Name" value={branchForm.name} onChange={e => setBranchForm(f => ({ ...f, name: e.target.value }))} />
+                <input className={`${inp} w-28`} placeholder="Code (CE)" value={branchForm.code} onChange={e => setBranchForm(f => ({ ...f, code: e.target.value }))} />
+                <input className={`${inp} flex-1`} placeholder="Full name" value={branchForm.name} onChange={e => setBranchForm(f => ({ ...f, name: e.target.value }))} />
               </div>
-              <button className={btn} onClick={() => branchMut.mutate()} disabled={!branchForm.code || !branchForm.name}>Add Branch</button>
+              <button className={`${btn} self-start`} onClick={() => branchMut.mutate()} disabled={!branchForm.code || !branchForm.name}>Add Branch</button>
             </div>
-            <div className="flex flex-col gap-1">
-              {branches.map((b: any) => <div key={b.id} className="flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-zinc-100 text-base"><span className="font-mono text-sm text-zinc-400 w-12">{b.code}</span><span className="text-zinc-800 font-medium">{b.name}</span></div>)}
+            <div className="flex flex-col divide-y divide-zinc-200">
+              {branches.map((b: any) => (
+                <div key={b.id} className="flex items-center gap-4 py-2.5">
+                  <span className="font-mono text-sm text-zinc-400 w-14">{b.code}</span>
+                  <span className="text-zinc-800 font-medium">{b.name}</span>
+                </div>
+              ))}
             </div>
           </div>
 
+          {/* Divisions */}
           <div className="bg-zinc-50 border-2 border-black rounded-xl p-6 shadow-[4px_4px_0_0_#000]">
             <h3 className="font-black text-zinc-800 text-lg mb-4">Divisions</h3>
             <div className="flex flex-col gap-3 mb-5">
               <select className={inp} value={divForm.branch_id} onChange={e => setDivForm(f => ({ ...f, branch_id: e.target.value }))}>
-                <option value="">Branch</option>
-                {branches.map((b: any) => <option key={b.id} value={b.id}>{b.code}</option>)}
+                <option value="">Select branch</option>
+                {branches.map((b: any) => <option key={b.id} value={b.id}>{b.code} — {b.name}</option>)}
               </select>
               <div className="flex gap-3">
                 <select className={`${inp} flex-1`} value={divForm.year} onChange={e => setDivForm(f => ({ ...f, year: e.target.value }))}>
                   {[1,2,3,4].map(y => <option key={y} value={y}>Year {y}</option>)}
                 </select>
-                <input className={`${inp} w-20`} placeholder="Div#" value={divForm.div_number} onChange={e => setDivForm(f => ({ ...f, div_number: e.target.value }))} />
+                <input className={`${inp} w-28`} placeholder="Div # (1)" value={divForm.div_number} onChange={e => setDivForm(f => ({ ...f, div_number: e.target.value }))} />
               </div>
               <div className="flex gap-3">
-                <input className={`${inp} flex-1`} placeholder="Label (CE-FY-Div1)" value={divForm.label} onChange={e => setDivForm(f => ({ ...f, label: e.target.value }))} />
-                <button className={btn} onClick={() => divMut.mutate()}>+</button>
+                <input className={`${inp} flex-1`} placeholder="Label (e.g. CE-FY-Div1)" value={divForm.label} onChange={e => setDivForm(f => ({ ...f, label: e.target.value }))} />
+                <button className={btn} onClick={() => divMut.mutate()} disabled={!divForm.branch_id || !divForm.label}>Add</button>
               </div>
             </div>
-            <div className="flex flex-col gap-1">
-              {divisions.map((d: any) => <div key={d.id} className="py-2 px-3 rounded-lg hover:bg-zinc-100 text-base text-zinc-800 font-medium">{d.label}</div>)}
+            <div className="flex flex-col divide-y divide-zinc-200">
+              {divisions.map((d: any) => (
+                <div key={d.id} className="flex items-center gap-4 py-2.5">
+                  <span className="font-mono text-sm text-zinc-400 w-14">{d.branch_code}</span>
+                  <span className="text-zinc-800 font-medium">{d.label}</span>
+                  <span className="text-zinc-400 text-sm ml-auto">Year {d.year}</span>
+                </div>
+              ))}
             </div>
           </div>
 
+          {/* Batches */}
           <div className="bg-zinc-50 border-2 border-black rounded-xl p-6 shadow-[4px_4px_0_0_#000]">
             <h3 className="font-black text-zinc-800 text-lg mb-4">Batches</h3>
             <div className="flex flex-col gap-3 mb-5">
               <select className={inp} value={batchDivId} onChange={e => setBatchDivId(e.target.value)}>
-                <option value="">Division</option>
+                <option value="">Select division</option>
                 {divisions.map((d: any) => <option key={d.id} value={d.id}>{d.label}</option>)}
               </select>
               <div className="flex gap-3">
-                <input className={`${inp} flex-1`} placeholder="Label (A1)" value={batchLabel} onChange={e => setBatchLabel(e.target.value)} />
+                <input className={`${inp} flex-1`} placeholder="Batch label (A1)" value={batchLabel} onChange={e => setBatchLabel(e.target.value)} />
                 <button className={btn} onClick={() => batchMut.mutate()} disabled={!batchDivId || !batchLabel}>Add</button>
               </div>
             </div>
-            {batchDivId && <div className="flex flex-wrap gap-2">{batchesForDiv.map((b: any) => <span key={b.id} className="bg-indigo-100 border-2 border-black text-indigo-900 text-sm font-bold px-3 py-1.5 rounded-lg">{b.label}</span>)}</div>}
+            {batchDivId && (
+              <div className="flex flex-wrap gap-2">
+                {batchesForDiv.map((b: any) => (
+                  <span key={b.id} className="bg-indigo-100 border-2 border-black text-indigo-900 text-sm font-bold px-3 py-1.5 rounded-lg">{b.label}</span>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
