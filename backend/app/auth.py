@@ -30,11 +30,15 @@ def create_access_token(subject: str) -> str:
 
 
 def authenticate_user(db: Session, identifier: str, password: str) -> User | None:
-    stmt = select(User).where(or_(User.student_id == identifier, User.teacher_id == identifier))
+    stmt = select(User).where(
+        or_(
+            User.student_id == identifier,
+            User.teacher_id == identifier,
+            User.admin_id == identifier,
+        )
+    )
     user = db.scalar(stmt)
-    if user is None:
-        return None
-    if not verify_password(password, user.password_hash):
+    if user is None or not verify_password(password, user.password_hash):
         return None
     return user
 
@@ -59,10 +63,21 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     return user
 
 
-def require_role(required_role: UserRole):
+def require_role(*required_roles: UserRole):
     def checker(user: User = Depends(get_current_user)) -> User:
-        if user.role != required_role:
+        if user.role not in required_roles:
             raise HTTPException(status_code=403, detail="Forbidden for this role")
         return user
-
     return checker
+
+
+def require_admin(user: User = Depends(get_current_user)) -> User:
+    if user.role != UserRole.admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
+def require_super_admin(user: User = Depends(get_current_user)) -> User:
+    if user.role != UserRole.admin or not user.is_super_admin:
+        raise HTTPException(status_code=403, detail="Super-admin access required")
+    return user
