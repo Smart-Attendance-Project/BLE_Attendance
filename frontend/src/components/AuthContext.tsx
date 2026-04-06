@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { login as apiLogin, getMe } from '../api/endpoints'
 
 interface AuthUser { id: string; full_name: string; role: string; is_super_admin: boolean }
@@ -9,6 +10,7 @@ export const useAuth = () => useContext(Ctx)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null)
+  const qc = useQueryClient()
 
   useEffect(() => {
     const token = localStorage.getItem('token')
@@ -20,9 +22,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem('token', data.access_token)
     const me = await getMe()
     setUser(me)
+    qc.clear()
   }
 
-  const logout = () => { localStorage.clear(); setUser(null) }
+  const logout = () => {
+    localStorage.clear()
+    setUser(null)
+    qc.clear()
+  }
 
   return <Ctx.Provider value={{ user, login, logout }}>{children}</Ctx.Provider>
 }
