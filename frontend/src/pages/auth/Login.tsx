@@ -58,7 +58,7 @@ export default function Login() {
           <button
             type="submit" disabled={loading}
             className="bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white font-black py-3 rounded-xl border-2 border-black shadow-[4px_4px_0_0_#000] hover:shadow-[2px_2px_0_0_#000] hover:translate-x-0.5 hover:translate-y-0.5 transition-all mt-1">
-            {loading ? 'Signing in…' : 'Sign in →'}
+            {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
       </div>
