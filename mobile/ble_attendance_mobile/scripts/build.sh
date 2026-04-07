@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-API_URL="${API_BASE_URL:-https://ble-attendance-api.onrender.com}"
+API_URL="${API_BASE_URL:-https://ble-attendance.onrender.com}"
 echo "Building with API_BASE_URL=$API_URL"
 
 # Check Flutter
