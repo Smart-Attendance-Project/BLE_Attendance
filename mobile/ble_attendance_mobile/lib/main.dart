@@ -48,7 +48,43 @@ class BleAttendanceApp extends StatelessWidget {
       title: 'BLE Attendance',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF0B6E4F)),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF4F46E5),
+          brightness: Brightness.light,
+        ),
+        useMaterial3: true,
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: const Color(0xFFF5F5F5),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: Color(0xFFE0E0E0)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: Color(0xFFE0E0E0)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: Color(0xFF4F46E5), width: 2),
+          ),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        ),
+        cardTheme: CardThemeData(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Color(0xFFE8E8E8)),
+          ),
+          color: Colors.white,
+        ),
+        filledButtonTheme: FilledButtonThemeData(
+          style: FilledButton.styleFrom(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+          ),
+        ),
       ),
       home: const LoginPage(),
     );
@@ -164,60 +200,107 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('BLE Attendance Login')),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SegmentedButton<AppRole>(
-              segments: const [
-                ButtonSegment(value: AppRole.student, label: Text('Student')),
-                ButtonSegment(value: AppRole.teacher, label: Text('Teacher')),
+      backgroundColor: const Color(0xFFF0F0F5),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Logo + title
+                Container(
+                  width: 64, height: 64,
+                  decoration: BoxDecoration(
+                    color: cs.primary,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Icon(Icons.school_rounded, color: Colors.white, size: 34),
+                ),
+                const SizedBox(height: 16),
+                Text('BLE Attendance',
+                    style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: cs.onSurface)),
+                const SizedBox(height: 4),
+                Text('Sign in to continue',
+                    style: TextStyle(fontSize: 14, color: cs.onSurface.withAlpha(140))),
+                const SizedBox(height: 32),
+
+                // Card
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [BoxShadow(color: Colors.black.withAlpha(15), blurRadius: 20, offset: const Offset(0, 4))],
+                  ),
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Role selector
+                      SegmentedButton<AppRole>(
+                        segments: const [
+                          ButtonSegment(value: AppRole.student, label: Text('Student'), icon: Icon(Icons.person_outline)),
+                          ButtonSegment(value: AppRole.teacher, label: Text('Teacher'), icon: Icon(Icons.cast_for_education_outlined)),
+                        ],
+                        selected: {_role},
+                        onSelectionChanged: (set) => setState(() => _role = set.first),
+                      ),
+                      const SizedBox(height: 20),
+                      if (_isRegister) ...[
+                        TextField(
+                          controller: _nameCtrl,
+                          decoration: const InputDecoration(labelText: 'Full name', prefixIcon: Icon(Icons.badge_outlined)),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                      TextField(
+                        controller: _identifierCtrl,
+                        textCapitalization: TextCapitalization.characters,
+                        decoration: InputDecoration(
+                          labelText: _role == AppRole.teacher ? 'Teacher ID (e.g. T001)' : 'Student ID (e.g. 25CE001)',
+                          prefixIcon: const Icon(Icons.fingerprint),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _passwordCtrl,
+                        decoration: const InputDecoration(labelText: 'Password', prefixIcon: Icon(Icons.lock_outline)),
+                        obscureText: true,
+                      ),
+                      const SizedBox(height: 8),
+                      // Server URL (collapsed by default)
+                      ExpansionTile(
+                        tilePadding: EdgeInsets.zero,
+                        title: Text('Server URL', style: TextStyle(fontSize: 13, color: cs.onSurface.withAlpha(160))),
+                        children: [
+                          TextField(
+                            controller: _serverUrlCtrl,
+                            decoration: const InputDecoration(labelText: 'API base URL', prefixIcon: Icon(Icons.dns_outlined)),
+                            keyboardType: TextInputType.url,
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      FilledButton(
+                        onPressed: _loading || !_ready ? null : _submit,
+                        child: _loading
+                            ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                            : Text(_isRegister ? 'Register & Login' : 'Sign In'),
+                      ),
+                      const SizedBox(height: 4),
+                      TextButton(
+                        onPressed: _loading ? null : () => setState(() => _isRegister = !_isRegister),
+                        child: Text(_isRegister ? 'Already have an account? Sign in' : 'New user? Register'),
+                      ),
+                    ],
+                  ),
+                ),
               ],
-              selected: {_role},
-              onSelectionChanged: (set) => setState(() => _role = set.first),
             ),
-            const SizedBox(height: 12),
-            if (_isRegister)
-              TextField(
-                controller: _nameCtrl,
-                decoration: const InputDecoration(labelText: 'Full name'),
-              ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _identifierCtrl,
-              textCapitalization: TextCapitalization.characters,
-              decoration: InputDecoration(
-                labelText: _role == AppRole.teacher
-                    ? 'Teacher ID (e.g. T001)'
-                    : 'Student ID (e.g. 25CE001)',
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _passwordCtrl,
-              decoration: const InputDecoration(labelText: 'Password'),
-              obscureText: true,
-            ),
-            const SizedBox(height: 16),
-            FilledButton(
-              onPressed: _loading || !_ready ? null : _submit,
-              child: Text(_loading
-                  ? 'Please wait...'
-                  : (_isRegister ? 'Register and Login' : 'Login')),
-            ),
-            const SizedBox(height: 4),
-            TextButton(
-              onPressed: _loading
-                  ? null
-                  : () => setState(() => _isRegister = !_isRegister),
-              child: Text(_isRegister
-                  ? 'Already have account? Login'
-                  : 'New user? Register'),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -473,101 +556,192 @@ class _TeacherPageState extends State<TeacherPage> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     final sortedStudents = _studentTallies.values.toList()
       ..sort((a, b) => b.hits.compareTo(a.hits));
 
     return Scaffold(
+      backgroundColor: const Color(0xFFF0F0F5),
       appBar: AppBar(
-        title: const Text('Teacher Dashboard'),
-        actions: [IconButton(onPressed: _logout, icon: const Icon(Icons.logout))],
+        backgroundColor: cs.primary,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        title: const Text('Teacher Dashboard', style: TextStyle(fontWeight: FontWeight.w700)),
+        actions: [IconButton(onPressed: _logout, icon: const Icon(Icons.logout_rounded))],
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Class picker (only when no active session)
             if (_sessionId == null) ...[
-              const Text('Select class to start:', style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
+              // ── Class picker ──
+              Text('Select a class to start',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: cs.onSurface.withAlpha(160), letterSpacing: 0.5)),
+              const SizedBox(height: 10),
               if (_todaySlots.isEmpty)
-                const Text('No classes scheduled today.', style: TextStyle(color: Colors.grey))
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: const Color(0xFFE8E8E8))),
+                  child: Column(children: [
+                    Icon(Icons.event_busy_rounded, size: 36, color: cs.onSurface.withAlpha(80)),
+                    const SizedBox(height: 8),
+                    Text('No classes scheduled today', style: TextStyle(color: cs.onSurface.withAlpha(140))),
+                  ]),
+                )
               else
                 ...(_todaySlots.map((slot) {
                   final isSelected = _selectedSlot?['slot_id'] == slot['slot_id'];
-                  return Card(
-                    color: isSelected ? Theme.of(context).colorScheme.primaryContainer : null,
-                    child: ListTile(
-                      title: Text('${slot['subject_name']} (${slot['subject_code']})'),
-                      subtitle: Text(
-                        '${slot['division_label']}${slot['batch_label'] != null ? ' / ${slot['batch_label']}' : ''}'
-                        ' · ${slot['time_start']}–${slot['time_end']}'
-                        '${slot['room'] != null ? ' · ${slot['room']}' : ''}',
-                      ),
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: InkWell(
                       onTap: () => setState(() => _selectedSlot = slot),
-                      trailing: isSelected ? const Icon(Icons.check_circle, color: Colors.green) : null,
+                      borderRadius: BorderRadius.circular(16),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: isSelected ? cs.primaryContainer : Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: isSelected ? cs.primary : const Color(0xFFE8E8E8), width: isSelected ? 2 : 1),
+                        ),
+                        child: Row(children: [
+                          Container(
+                            width: 42, height: 42,
+                            decoration: BoxDecoration(color: isSelected ? cs.primary : cs.primaryContainer, borderRadius: BorderRadius.circular(10)),
+                            child: Icon(Icons.menu_book_rounded, color: isSelected ? Colors.white : cs.primary, size: 20),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text('${slot['subject_name']}', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                            const SizedBox(height: 2),
+                            Text(
+                              '${slot['division_label']}${slot['batch_label'] != null ? ' · ${slot['batch_label']}' : ''}'
+                              '  ${slot['time_start']}–${slot['time_end']}'
+                              '${slot['room'] != null ? '  · ${slot['room']}' : ''}',
+                              style: TextStyle(fontSize: 12, color: cs.onSurface.withAlpha(160)),
+                            ),
+                          ])),
+                          if (isSelected) Icon(Icons.check_circle_rounded, color: cs.primary),
+                        ]),
+                      ),
                     ),
                   );
                 })),
               const SizedBox(height: 12),
-              FilledButton(
+              FilledButton.icon(
                 onPressed: _loading || _selectedSlot == null ? null : _startSession,
-                child: const Text('Start Session + BLE Broadcast'),
+                icon: const Icon(Icons.play_arrow_rounded),
+                label: const Text('Start Session + BLE Broadcast'),
               ),
             ] else ...[
-              // Active session info
-              Card(
-                color: Theme.of(context).colorScheme.primaryContainer,
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Session Active', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
-                      Text('BLE: ${_isAdvertising ? "Broadcasting" : "OFF"} | Scan: ${_isScanning ? "ON" : "OFF"}'),
-                      Text('Finalization: ${_finalizationOpen ? "OPEN" : "CLOSED"}'),
-                      if (_summary != null)
-                        Text('Attendance: ${_summary!['present_students']}/${_summary!['total_students']} present'),
-                    ],
-                  ),
+              // ── Active session ──
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(colors: [cs.primary, cs.primary.withAlpha(200)], begin: Alignment.topLeft, end: Alignment.bottomRight),
+                  borderRadius: BorderRadius.circular(16),
                 ),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    const Icon(Icons.radio_button_checked, color: Colors.white, size: 16),
+                    const SizedBox(width: 6),
+                    const Text('Session Active', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16)),
+                    const Spacer(),
+                    if (_summary != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(color: Colors.white.withAlpha(50), borderRadius: BorderRadius.circular(20)),
+                        child: Text('${_summary!['present_students']}/${_summary!['total_students']} present',
+                            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                      ),
+                  ]),
+                  const SizedBox(height: 8),
+                  Wrap(spacing: 8, children: [
+                    _StatusChip(label: _isAdvertising ? 'BLE ON' : 'BLE OFF', active: _isAdvertising),
+                    _StatusChip(label: _isScanning ? 'Scan ON' : 'Scan OFF', active: _isScanning),
+                    _StatusChip(label: _finalizationOpen ? 'Finalization OPEN' : 'Finalization CLOSED', active: _finalizationOpen),
+                  ]),
+                ]),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 10),
               FilledButton.tonal(
                 onPressed: _loading || _finalizationOpen ? null : _openFinalization,
                 child: const Text('Open Finalization for Students'),
               ),
-              const SizedBox(height: 8),
-              Text('Students detected (${sortedStudents.length}):', style: const TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 4),
-              Expanded(
-                child: ListView.builder(
-                  itemCount: sortedStudents.length,
-                  itemBuilder: (context, index) {
-                    final s = sortedStudents[index];
-                    return ListTile(
-                      dense: true,
-                      title: Text(s.studentId),
-                      subtitle: Text('Hits: ${s.hits}/${s.total} | RSSI: ${s.latestRssi} | ${_timeAgo(s.latestAt)}'),
-                      trailing: Icon(s.inRange ? Icons.check_circle : Icons.cancel,
-                          color: s.inRange ? Colors.green : Colors.red),
-                    );
-                  },
+              const SizedBox(height: 14),
+              Row(children: [
+                Text('Detected students', style: TextStyle(fontWeight: FontWeight.w700, color: cs.onSurface)),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(color: cs.primaryContainer, borderRadius: BorderRadius.circular(20)),
+                  child: Text('${sortedStudents.length}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: cs.primary)),
                 ),
+              ]),
+              const SizedBox(height: 8),
+              Expanded(
+                child: sortedStudents.isEmpty
+                    ? Center(child: Text('Waiting for students…', style: TextStyle(color: cs.onSurface.withAlpha(120))))
+                    : ListView.separated(
+                        itemCount: sortedStudents.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 6),
+                        itemBuilder: (context, index) {
+                          final s = sortedStudents[index];
+                          final ratio = s.total > 0 ? s.hits / s.total : 0.0;
+                          return Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: s.inRange ? const Color(0xFFBBF7D0) : const Color(0xFFE8E8E8)),
+                            ),
+                            child: Row(children: [
+                              Container(
+                                width: 36, height: 36,
+                                decoration: BoxDecoration(
+                                  color: s.inRange ? const Color(0xFFDCFCE7) : const Color(0xFFF5F5F5),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Icon(s.inRange ? Icons.check_rounded : Icons.close_rounded,
+                                    color: s.inRange ? Colors.green : Colors.grey, size: 18),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                Text(s.studentId, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                                Text('${s.hits}/${s.total} hits · RSSI ${s.latestRssi ?? '-'} · ${_timeAgo(s.latestAt)}',
+                                    style: TextStyle(fontSize: 11, color: cs.onSurface.withAlpha(140))),
+                              ])),
+                              SizedBox(
+                                width: 36,
+                                child: CircularProgressIndicator(
+                                  value: ratio,
+                                  strokeWidth: 3,
+                                  backgroundColor: const Color(0xFFE8E8E8),
+                                  color: ratio >= 0.6 ? Colors.green : Colors.orange,
+                                ),
+                              ),
+                            ]),
+                          );
+                        },
+                      ),
               ),
-              const Divider(height: 24),
-              OutlinedButton(
-                style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(foregroundColor: Colors.red, side: const BorderSide(color: Colors.red)),
                 onPressed: _loading ? null : () => setState(() => _showEndConfirm = !_showEndConfirm),
-                child: Text(_showEndConfirm ? 'Cancel' : 'End Session'),
+                icon: Icon(_showEndConfirm ? Icons.close_rounded : Icons.stop_circle_outlined),
+                label: Text(_showEndConfirm ? 'Cancel' : 'End Session'),
               ),
               if (_showEndConfirm)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
-                  child: FilledButton(
+                  child: FilledButton.icon(
                     style: FilledButton.styleFrom(backgroundColor: Colors.red),
                     onPressed: _loading ? null : _endSession,
-                    child: const Text('Confirm End + Submit Attendance'),
+                    icon: const Icon(Icons.check_rounded),
+                    label: const Text('Confirm End + Submit Attendance'),
                   ),
                 ),
             ],
@@ -583,6 +757,25 @@ class _TeacherPageState extends State<TeacherPage> {
     final diff = DateTime.now().difference(dt);
     if (diff.inSeconds < 60) return '${diff.inSeconds}s ago';
     return '${diff.inMinutes}m ago';
+  }
+}
+
+class _StatusChip extends StatelessWidget {
+  const _StatusChip({required this.label, required this.active});
+  final String label;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: active ? Colors.white.withAlpha(50) : Colors.white.withAlpha(20),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withAlpha(80)),
+      ),
+      child: Text(label, style: TextStyle(color: active ? Colors.white : Colors.white.withAlpha(160), fontSize: 11, fontWeight: FontWeight.w600)),
+    );
   }
 }
 
@@ -937,134 +1130,131 @@ class _StudentPageState extends State<StudentPage> {
 
   @override
   Widget build(BuildContext context) {
-    final statusColor = _proximityOk == null
+    final cs = Theme.of(context).colorScheme;
+    final proximityColor = _proximityOk == null
         ? Colors.grey
-        : (_proximityOk! ? Colors.green : Colors.red);
-    final statusText = _proximityOk == null
-        ? 'Searching for teacher...'
-        : (_proximityOk! ? 'In range ✅' : 'Out of range ❌');
+        : (_proximityOk! ? const Color(0xFF16A34A) : const Color(0xFFDC2626));
+    final proximityBg = _proximityOk == null
+        ? const Color(0xFFF5F5F5)
+        : (_proximityOk! ? const Color(0xFFDCFCE7) : const Color(0xFFFEE2E2));
+    final proximityText = _proximityOk == null
+        ? 'Searching for teacher…'
+        : (_proximityOk! ? 'In Range' : 'Out of Range');
+    final proximityIcon = _proximityOk == null
+        ? Icons.radar_rounded
+        : (_proximityOk! ? Icons.wifi_rounded : Icons.wifi_off_rounded);
 
     return Scaffold(
+      backgroundColor: const Color(0xFFF0F0F5),
       appBar: AppBar(
-        title: const Text('Student Dashboard'),
-        actions: [
-          IconButton(onPressed: _logout, icon: const Icon(Icons.logout)),
-        ],
+        backgroundColor: cs.primary,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        title: const Text('Student Dashboard', style: TextStyle(fontWeight: FontWeight.w700)),
+        actions: [IconButton(onPressed: _logout, icon: const Icon(Icons.logout_rounded))],
       ),
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Lecture name — prominent
-            if (_subject != null && _subject!.isNotEmpty)
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.menu_book, size: 28),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        _subject!,
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ],
-                ),
-              )
-            else
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade200,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Text(
-                  'No active lecture',
-                  textAlign: TextAlign.center,
-                ),
+            // Subject card
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: _subject != null ? cs.primaryContainer : const Color(0xFFF5F5F5),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: _subject != null ? cs.primary.withAlpha(60) : const Color(0xFFE8E8E8)),
               ),
+              child: Row(children: [
+                Container(
+                  width: 44, height: 44,
+                  decoration: BoxDecoration(color: _subject != null ? cs.primary : Colors.grey.shade300, borderRadius: BorderRadius.circular(12)),
+                  child: Icon(Icons.menu_book_rounded, color: _subject != null ? Colors.white : Colors.grey, size: 22),
+                ),
+                const SizedBox(width: 12),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(_subject != null ? 'Current Lecture' : 'No Active Lecture',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: cs.onSurface.withAlpha(140), letterSpacing: 0.4)),
+                  if (_subject != null) ...[
+                    const SizedBox(height: 2),
+                    Text(_subject!, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                  ],
+                ])),
+              ]),
+            ),
 
             const SizedBox(height: 16),
 
-            // Proximity status
-            Row(
-              children: [
-                Container(
-                  width: 20,
-                  height: 20,
-                  decoration: BoxDecoration(
-                    color: statusColor,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Text(
-                  statusText,
-                  style: const TextStyle(fontSize: 16),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-
-            // Status details
-            Text('RSSI: ${_latestRssi ?? '-'}'),
-            Text('Scanning: ${_scanning ? 'ON' : 'OFF'}'),
-            Text('Advertising ID: ${_advertising ? (_studentIdentifier ?? '-') : 'OFF'}'),
-            Text('Bluetooth: $_bleStatus'),
-            if (_scanError != null) Text('Status: $_scanError'),
-            if (!_blePermissionsGranted)
-              const Text(
-                'Scanning blocked: enable Nearby devices permission.',
-                style: TextStyle(color: Colors.red),
-              ),
-            Text(
-              'Finalization: ${_finalizationOpen ? 'OPEN' : 'WAITING FOR TEACHER'}',
-            ),
-            const Text(
-              'Auto-scanning periodically. No action needed.',
-              style: TextStyle(
-                fontStyle: FontStyle.italic,
-                color: Colors.grey,
-              ),
+            // Proximity indicator — big and prominent
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 28),
+              decoration: BoxDecoration(color: proximityBg, borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: proximityColor.withAlpha(80))),
+              child: Column(children: [
+                Icon(proximityIcon, size: 52, color: proximityColor),
+                const SizedBox(height: 10),
+                Text(proximityText, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: proximityColor)),
+                if (_latestRssi != null) ...[
+                  const SizedBox(height: 4),
+                  Text('Signal: ${_latestRssi} dBm', style: TextStyle(fontSize: 13, color: proximityColor.withAlpha(180))),
+                ],
+              ]),
             ),
 
-            const SizedBox(height: 20),
+            const SizedBox(height: 16),
 
-            // Biometric finalize
+            // Status info card
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFFE8E8E8))),
+              child: Column(children: [
+                _StatusRow(icon: Icons.bluetooth_searching_rounded, label: 'BLE Scan', value: _scanning ? 'Active' : 'Off', active: _scanning),
+                const Divider(height: 16),
+                _StatusRow(icon: Icons.broadcast_on_personal_rounded, label: 'Advertising', value: _advertising ? (_studentIdentifier ?? 'On') : 'Off', active: _advertising),
+                const Divider(height: 16),
+                _StatusRow(icon: Icons.how_to_reg_rounded, label: 'Finalization',
+                    value: _finalizationOpen ? 'Open — tap button below' : 'Waiting for teacher',
+                    active: _finalizationOpen),
+                if (_scanError != null) ...[
+                  const Divider(height: 16),
+                  _StatusRow(icon: Icons.warning_amber_rounded, label: 'Status', value: _scanError!, active: false, isWarning: true),
+                ],
+                if (!_blePermissionsGranted) ...[
+                  const Divider(height: 16),
+                  _StatusRow(icon: Icons.block_rounded, label: 'Permission', value: 'Nearby devices denied', active: false, isWarning: true),
+                ],
+              ]),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Finalize button
             FilledButton.icon(
               onPressed: _finalizationOpen ? _finalizeWithBiometric : null,
-              icon: const Icon(Icons.fingerprint),
+              icon: const Icon(Icons.fingerprint_rounded),
               label: const Text('Finalize Attendance (Biometric)'),
             ),
-            const SizedBox(height: 12),
 
-            // Battery settings button
             if (Platform.isAndroid) ...[
+              const SizedBox(height: 10),
               OutlinedButton.icon(
                 onPressed: () async {
-                  const intent = AndroidIntent(
-                    action:
-                        'android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS',
-                  );
+                  const intent = AndroidIntent(action: 'android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS');
                   await intent.launch();
                 },
-                icon: const Icon(Icons.battery_saver),
+                icon: const Icon(Icons.battery_saver_outlined),
                 label: const Text('Disable Battery Optimization'),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 6),
               OutlinedButton.icon(
                 onPressed: _openAutoStartSettings,
-                icon: const Icon(Icons.settings),
-                label: const Text('Fix Background Restrictions (Xiaomi/Samsung)'),
+                icon: const Icon(Icons.settings_outlined),
+                label: const Text('Fix Background Restrictions'),
               ),
             ],
+            const SizedBox(height: 8),
           ],
         ),
       ),
@@ -1093,6 +1283,27 @@ class _StudentPageState extends State<StudentPage> {
       );
       await intent.launch();
     } catch (_) {}
+  }
+}
+
+class _StatusRow extends StatelessWidget {
+  const _StatusRow({required this.icon, required this.label, required this.value, required this.active, this.isWarning = false});
+  final IconData icon;
+  final String label;
+  final String value;
+  final bool active;
+  final bool isWarning;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isWarning ? Colors.orange : (active ? const Color(0xFF16A34A) : Colors.grey);
+    return Row(children: [
+      Icon(icon, size: 18, color: color),
+      const SizedBox(width: 10),
+      Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+      const Spacer(),
+      Text(value, style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w500)),
+    ]);
   }
 }
 
