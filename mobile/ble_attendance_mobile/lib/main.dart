@@ -123,25 +123,30 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> _bootstrap() async {
-    await _api.init();
-    await _api.enablePersistentConnection();
-    _serverUrlCtrl.text = _api.baseUrl;
-    final token = await _api.readToken();
-    if (token != null && token.isNotEmpty) {
-      final roleName = await _api.readRole();
-      if (!mounted) return;
-      if (roleName == AppRole.teacher.name) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => TeacherPage(api: _api)),
-        );
-        return;
+    try {
+      await _api.init();
+      await _api.enablePersistentConnection();
+      _serverUrlCtrl.text = _api.baseUrl;
+      final token = await _api.readToken();
+      if (token != null && token.isNotEmpty) {
+        final roleName = await _api.readRole();
+        if (!mounted) return;
+        if (roleName == AppRole.teacher.name) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => TeacherPage(api: _api)),
+          );
+          return;
+        }
+        if (roleName == AppRole.student.name) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => StudentPage(api: _api)),
+          );
+          return;
+        }
       }
-      if (roleName == AppRole.student.name) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => StudentPage(api: _api)),
-        );
-        return;
-      }
+    } catch (_) {
+      // FlutterSecureStorage can fail on some devices (keystore issues).
+      // Fall through to show the login form so the user is never stuck.
     }
     if (!mounted) return;
     setState(() => _ready = true);
@@ -995,7 +1000,9 @@ class _StudentPageState extends State<StudentPage> {
               setState(() {
                 _latestRssi = avgRssi;
                 _sessionId ??= 'ble-detected';
-                if (payload['subject'] != null) {
+                // Only use BLE-decoded subject if the server hasn't
+                // provided one yet (server data is more reliable).
+                if (_subject == null && payload['subject'] != null) {
                   _subject = payload['subject'] as String;
                 }
               });
@@ -1043,12 +1050,20 @@ class _StudentPageState extends State<StudentPage> {
     try {
       final bytes = device.manufacturerData;
       if (bytes.length < 4) return null;
-      final payload = utf8.decode(bytes.sublist(2), allowMalformed: true);
+      // Strict decode — reject garbled BLE noise instead of replacing chars.
+      final payload = utf8.decode(bytes.sublist(2));
       if (!payload.contains('|')) return null;
       final parts = payload.split('|');
+      final token = parts[0];
+      final subject = parts.length > 1 ? parts[1].trim() : null;
+      // Validate: token and subject must be printable (no control chars).
+      if (token.isEmpty || RegExp(r'[\x00-\x1F]').hasMatch(token)) return null;
+      if (subject != null && (subject.isEmpty || RegExp(r'[\x00-\x1F]').hasMatch(subject))) {
+        return {'token': token, 'subject': null};
+      }
       return {
-        'token': parts[0],
-        'subject': parts.length > 1 ? parts[1] : null,
+        'token': token,
+        'subject': subject,
       };
     } catch (_) {}
     return null;
