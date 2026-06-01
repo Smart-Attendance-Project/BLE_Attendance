@@ -278,6 +278,10 @@ def main():
         for s in db.execute(select(ScheduleSlot)).scalars().all():
             db.delete(s)
         db.flush()
+        # Null out sessions.assignment_id so the FK doesn't block deletion
+        from app.models import Session as LectureSession
+        db.execute(text("UPDATE sessions SET assignment_id = NULL"))
+        db.flush()
         for a in db.execute(select(TeacherAssignment)).scalars().all():
             db.delete(a)
         db.flush()
