@@ -7,6 +7,7 @@ import TeacherDashboard from './pages/teacher/Dashboard'
 import SessionList from './pages/teacher/SessionList'
 import Export from './pages/teacher/Export'
 import Students from './pages/teacher/Students'
+import ChangePassword from './pages/teacher/ChangePassword'
 import AdminDashboard from './pages/admin/Dashboard'
 import Teachers from './pages/admin/Teachers'
 import Admins from './pages/admin/Admins'
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="/teacher/sessions" element={<RequireAuth role="teacher"><SessionList /></RequireAuth>} />
         <Route path="/teacher/export" element={<RequireAuth role="teacher"><Export /></RequireAuth>} />
         <Route path="/teacher/students" element={<RequireAuth role="teacher"><Students /></RequireAuth>} />
+        <Route path="/teacher/password" element={<RequireAuth role="teacher"><ChangePassword /></RequireAuth>} />
 
         <Route path="/admin" element={<RequireAuth role="admin"><AdminDashboard /></RequireAuth>} />
         <Route path="/admin/teachers" element={<RequireAuth role="admin"><Teachers /></RequireAuth>} />

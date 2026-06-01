@@ -192,6 +192,15 @@ def main():
                         password_hash=hash_password(DEFAULT_PASS), is_super_admin=True))
             print("Created super admin: ADMIN001")
 
+        # ── T000: test teacher with 24/7 schedule ──────────────────────────
+        t000 = db.scalar(select(User).where(User.teacher_id == "T000"))
+        if not t000:
+            t000 = User(full_name="Test Teacher", role=UserRole.teacher,
+                        teacher_id="T000", password_hash=hash_password(DEFAULT_PASS))
+            db.add(t000)
+            db.flush()
+            print("Created test teacher: T000")
+
         # Teachers — update name if exists, create if not
         teacher_map = {}
         for short, name, tid in CE_TEACHERS:
@@ -289,6 +298,21 @@ def main():
                                     day_of_week=day, time_start=ts, time_end=te, room=room))
 
         db.flush()
+
+        # ── T000: 24/7 test schedule (Mon–Sun, 00:00–23:59) ───────────────
+        t000 = db.scalar(select(User).where(User.teacher_id == "T000"))
+        if t000:
+            test_subj, _ = get_or_create(db, Subject, code="TEST001",
+                                         defaults=dict(name="Test Subject", subject_type="lecture"))
+            test_assign, _ = get_or_create(db, TeacherAssignment,
+                                           teacher_user_id=t000.id, subject_id=test_subj.id,
+                                           division_id=div1.id, batch_id=None)
+            for day in range(7):  # 0=Mon … 6=Sun
+                db.add(ScheduleSlot(assignment_id=test_assign.id, semester_id=sem.id,
+                                    day_of_week=day, time_start="00:00", time_end="23:59",
+                                    room="TEST"))
+            db.flush()
+            print("T000 24/7 schedule created")
 
         # Students 25CE001-25CE142
         created_count = 0

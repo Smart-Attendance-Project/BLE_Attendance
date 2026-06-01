@@ -1034,6 +1034,7 @@ class _StudentPageState extends State<StudentPage> {
     if (_rawProximityOk != newValue) {
       _rawProximityOk = newValue;
       _rawProximityChangeAt = now;
+      // Do NOT apply immediately — wait for debounce to confirm stability
     } else if (_rawProximityChangeAt != null &&
         now.difference(_rawProximityChangeAt!) >= kProximityDebounceDuration) {
       // Value has been stable for debounce duration — apply it
@@ -1041,8 +1042,8 @@ class _StudentPageState extends State<StudentPage> {
         setState(() => _proximityOk = newValue);
       }
     }
-    // Also set immediately on first reading
-    _proximityOk ??= newValue;
+    // First reading: only set after debounce window, not immediately
+    // (removed the _proximityOk ??= newValue that bypassed debounce)
   }
 
   Map<String, dynamic>? _decodeTeacherPayload(DiscoveredDevice device) {
@@ -1143,6 +1144,63 @@ class _StudentPageState extends State<StudentPage> {
     );
   }
 
+  Future<void> _showChangePasswordDialog() async {
+    final oldCtrl = TextEditingController();
+    final newCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    String? error;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: const Text('Change Password', style: TextStyle(fontWeight: FontWeight.w700)),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(controller: oldCtrl, obscureText: true,
+                decoration: const InputDecoration(labelText: 'Current password')),
+            const SizedBox(height: 12),
+            TextField(controller: newCtrl, obscureText: true,
+                decoration: const InputDecoration(labelText: 'New password (min 6 chars)')),
+            const SizedBox(height: 12),
+            TextField(controller: confirmCtrl, obscureText: true,
+                decoration: const InputDecoration(labelText: 'Confirm new password')),
+            if (error != null) ...[
+              const SizedBox(height: 10),
+              Text(error!, style: const TextStyle(color: Colors.red, fontSize: 13)),
+            ],
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () async {
+                if (newCtrl.text != confirmCtrl.text) {
+                  setS(() => error = 'Passwords do not match');
+                  return;
+                }
+                if (newCtrl.text.length < 6) {
+                  setS(() => error = 'New password must be at least 6 characters');
+                  return;
+                }
+                try {
+                  await widget.api.changePassword(oldCtrl.text, newCtrl.text);
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Password changed successfully')),
+                    );
+                  }
+                } catch (e) {
+                  setS(() => error = _friendlyError(e));
+                }
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -1166,7 +1224,10 @@ class _StudentPageState extends State<StudentPage> {
         foregroundColor: Colors.white,
         elevation: 0,
         title: const Text('Student Dashboard', style: TextStyle(fontWeight: FontWeight.w700)),
-        actions: [IconButton(onPressed: _logout, icon: const Icon(Icons.logout_rounded))],
+        actions: [
+          IconButton(onPressed: _showChangePasswordDialog, icon: const Icon(Icons.key_rounded)),
+          IconButton(onPressed: _logout, icon: const Icon(Icons.logout_rounded)),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
@@ -1496,6 +1557,12 @@ class ApiClient {
 
   Future<Map<String, dynamic>> getAttendanceSummary(String sessionId) =>
       _authedGet('/teacher/sessions/$sessionId/attendance-summary');
+
+  Future<Map<String, dynamic>> changePassword(String oldPassword, String newPassword) =>
+      _authedPost('/auth/change-password', {
+        'old_password': oldPassword,
+        'new_password': newPassword,
+      });
 
   // Excel download
   Future<List<int>> downloadAttendanceExcel(String sessionId) async {

@@ -1,6 +1,6 @@
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from './AuthContext'
-import { LogOut, LayoutDashboard, Download, Users, BookOpen, Calendar, ShieldCheck, GraduationCap } from 'lucide-react'
+import { LogOut, LayoutDashboard, Download, Users, BookOpen, Calendar, ShieldCheck, GraduationCap, KeyRound } from 'lucide-react'
 
 export function Nav() {
   const { user, logout } = useAuth()
@@ -34,6 +34,7 @@ export function Nav() {
         {link('/teacher/sessions', 'Attendance', BookOpen)}
         {link('/teacher/export', 'Export', Download)}
         {link('/teacher/students', 'Students', Users)}
+        {link('/teacher/password', 'Password', KeyRound)}
       </>}
 
       {user?.role === 'admin' && <>

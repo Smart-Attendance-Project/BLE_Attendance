@@ -34,6 +34,15 @@ export const addStudent = (data: { full_name: string; student_id: string; divisi
 export const getDivisionStudents = (divisionId: number) =>
   api.get(`/teacher/divisions/${divisionId}/students`).then(r => r.data)
 
+export const startSession = (data: { subject: string; assignment_id?: number }) =>
+  api.post('/sessions', data).then(r => r.data)
+
+export const endSession = (sessionId: string) =>
+  api.post(`/sessions/${sessionId}/end`).then(r => r.data)
+
+export const changePassword = (oldPassword: string, newPassword: string) =>
+  api.post('/auth/change-password', { old_password: oldPassword, new_password: newPassword }).then(r => r.data)
+
 // Admin
 export const adminListTeachers = () => api.get('/admin/teachers').then(r => r.data)
 export const adminCreateTeacher = (data: { full_name: string; teacher_id: string; password: string }) =>

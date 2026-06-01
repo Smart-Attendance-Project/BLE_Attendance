@@ -1,17 +1,24 @@
 import io
 import secrets
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
 import re
+
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _now_ist() -> datetime:
+    return datetime.now(tz=IST)
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from sqlalchemy import inspect, text, and_, desc, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import inspect, text, and_, desc, func, select
+from sqlalchemy.orm import Session, joinedload
 
 from app.auth import (
     authenticate_user, create_access_token, get_current_user,
     hash_password, require_role, require_admin, require_super_admin,
+    verify_password,
 )
 from app.database import Base, engine, get_db
 from app.models import (
@@ -117,6 +124,23 @@ def me(user: User = Depends(get_current_user)):
     return UserOut(id=user.id, full_name=user.full_name, role=user.role,
                    student_id=user.student_id, teacher_id=user.teacher_id,
                    admin_id=user.admin_id, is_super_admin=user.is_super_admin)
+
+
+@app.post("/auth/change-password")
+def change_password(
+    payload: dict,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    old_pw = payload.get("old_password", "")
+    new_pw = payload.get("new_password", "")
+    if not verify_password(old_pw, user.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    if len(new_pw) < 6:
+        raise HTTPException(status_code=422, detail="New password must be at least 6 characters")
+    user.password_hash = hash_password(new_pw)
+    db.commit()
+    return {"message": "Password changed successfully"}
 
 
 # ── BLE Sessions ──────────────────────────────────────────────────────────────
@@ -282,12 +306,19 @@ def get_session_detections(session_id: str, db: Session = Depends(get_db),
 @app.get("/teacher/me/schedule/today")
 def teacher_today_schedule(db: Session = Depends(get_db),
                            teacher: User = Depends(require_role(UserRole.teacher))):
-    today = datetime.utcnow().weekday()  # 0=Mon
+    today = _now_ist().weekday()  # 0=Mon, IST
     sem = db.scalar(select(Semester).where(Semester.is_active.is_(True)))
     if not sem:
         return []
     slots = db.execute(
-        select(ScheduleSlot).where(
+        select(ScheduleSlot)
+        .options(
+            joinedload(ScheduleSlot.assignment).joinedload(TeacherAssignment.subject),
+            joinedload(ScheduleSlot.assignment).joinedload(TeacherAssignment.division).joinedload(Division.branch),
+            joinedload(ScheduleSlot.assignment).joinedload(TeacherAssignment.batch),
+            joinedload(ScheduleSlot.assignment).joinedload(TeacherAssignment.teacher),
+        )
+        .where(
             and_(ScheduleSlot.day_of_week == today, ScheduleSlot.semester_id == sem.id)
         ).order_by(ScheduleSlot.time_start)
     ).scalars().all()
@@ -806,12 +837,18 @@ def batch_submit_attendance(
 def teacher_today_slots_mobile(db: Session = Depends(get_db),
                                teacher: User = Depends(require_role(UserRole.teacher))):
     """Today's schedule with full detail for mobile app start-session flow."""
-    today = datetime.utcnow().weekday()
+    today = _now_ist().weekday()  # IST
     sem = db.scalar(select(Semester).where(Semester.is_active.is_(True)))
     if not sem:
         return []
     slots = db.execute(
-        select(ScheduleSlot).where(
+        select(ScheduleSlot)
+        .options(
+            joinedload(ScheduleSlot.assignment).joinedload(TeacherAssignment.subject),
+            joinedload(ScheduleSlot.assignment).joinedload(TeacherAssignment.division),
+            joinedload(ScheduleSlot.assignment).joinedload(TeacherAssignment.batch),
+        )
+        .where(
             and_(ScheduleSlot.day_of_week == today, ScheduleSlot.semester_id == sem.id)
         ).order_by(ScheduleSlot.time_start)
     ).scalars().all()
@@ -893,21 +930,39 @@ def _slot_out(slot: ScheduleSlot) -> ScheduleSlotOut:
 
 
 def _build_summary(db, session: LectureSession) -> SessionAttendanceSummary:
-    rows = db.execute(
-        select(User, Attendance, func.count(Detection.id).label("dc"))
-        .select_from(User)
-        .outerjoin(Detection, and_(Detection.student_user_id == User.id,
-                                   Detection.session_id == session.id))
-        .outerjoin(Attendance, and_(Attendance.student_user_id == User.id,
-                                    Attendance.session_id == session.id))
-        .where(User.role == UserRole.student)
-        .having(or_(func.count(Detection.id) > 0, Attendance.id.is_not(None)))
-        .group_by(User.id, Attendance.id)
-        .order_by(User.student_id)
-    ).all()
+    # Get all students enrolled in the assignment's division (and batch if set)
+    assignment = session.assignment
+    if assignment:
+        q = (
+            select(User)
+            .join(DivisionStudent, DivisionStudent.student_user_id == User.id)
+            .where(DivisionStudent.division_id == assignment.division_id)
+        )
+        if assignment.batch_id:
+            q = q.where(DivisionStudent.batch_id == assignment.batch_id)
+        all_students = db.execute(q.order_by(User.student_id)).scalars().all()
+    else:
+        # Fallback: only students with detections or attendance records
+        all_students = db.execute(
+            select(User)
+            .join(Detection, Detection.student_user_id == User.id)
+            .where(Detection.session_id == session.id)
+            .distinct()
+            .order_by(User.student_id)
+        ).scalars().all()
 
     records, present = [], 0
-    for user, att, dc in rows:
+    for user in all_students:
+        dc = db.scalar(
+            select(func.count(Detection.id)).where(
+                and_(Detection.session_id == session.id, Detection.student_user_id == user.id)
+            )
+        ) or 0
+        att = db.scalar(
+            select(Attendance).where(
+                and_(Attendance.session_id == session.id, Attendance.student_user_id == user.id)
+            )
+        )
         if att is None:
             ratio = compute_presence_ratio(db, session.id, user.id)
             is_present = ratio >= 0.6

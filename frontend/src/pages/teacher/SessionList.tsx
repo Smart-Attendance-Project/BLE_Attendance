@@ -66,7 +66,7 @@ export default function SessionList() {
         <div className="bg-zinc-50 border-2 border-black rounded-xl p-6 mb-6 shadow-[4px_4px_0_0_#000] flex items-center justify-between gap-4 flex-wrap">
           <div>
             <h2 className="font-black text-zinc-900 text-2xl">{summary.subject}</h2>
-            <p className="text-base text-zinc-500 mt-1">{new Date(summary.starts_at).toLocaleDateString('en-IN', { dateStyle: 'full' })}</p>
+            <p className="text-base text-zinc-500 mt-1">{new Date(summary.starts_at + 'Z').toLocaleDateString('en-IN', { dateStyle: 'full' })}</p>
           </div>
           <div className="flex items-center gap-5">
             <div className="text-center">
@@ -158,8 +158,8 @@ export default function SessionList() {
             return (
               <button key={s.id} onClick={() => setSelectedSession(s.id)}
                 className="text-left bg-zinc-50 border-2 border-black rounded-xl p-5 shadow-[4px_4px_0_0_#000] hover:shadow-[2px_2px_0_0_#000] hover:translate-x-0.5 hover:translate-y-0.5 transition-all">
-                <div className="font-black text-zinc-900 text-lg">{new Date(s.starts_at).toLocaleDateString('en-IN', { dateStyle: 'medium' })}</div>
-                <div className="text-sm text-zinc-500 mt-1">{new Date(s.starts_at).toLocaleTimeString('en-IN', { timeStyle: 'short' })}</div>
+                <div className="font-black text-zinc-900 text-lg">{new Date(s.starts_at + 'Z').toLocaleDateString('en-IN', { dateStyle: 'medium' })}</div>
+                <div className="text-sm text-zinc-500 mt-1">{new Date(s.starts_at + 'Z').toLocaleTimeString('en-IN', { timeStyle: 'short' })}</div>
                 <div className="flex items-center gap-2 mt-4">
                   {s.is_active
                     ? <span className="text-sm font-bold text-green-700 bg-green-100 border-2 border-green-400 px-3 py-1 rounded-lg">Active</span>

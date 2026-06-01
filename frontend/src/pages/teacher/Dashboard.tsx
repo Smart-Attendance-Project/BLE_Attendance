@@ -1,21 +1,79 @@
-import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { getTodaySchedule } from '../../api/endpoints'
-import { Clock, MapPin, Users, ArrowRight } from 'lucide-react'
+import { getTodaySchedule, getMyAssignments, startSession, endSession } from '../../api/endpoints'
+import { Clock, MapPin, Users, ArrowRight, FlaskConical, StopCircle } from 'lucide-react'
 
-const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
+const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
 
 export default function TeacherDashboard() {
   const { data: slots = [], isLoading } = useQuery({ queryKey: ['today-schedule'], queryFn: getTodaySchedule })
+  const { data: assignments = [] } = useQuery({ queryKey: ['my-assignments'], queryFn: getMyAssignments })
+  const [activeTestSession, setActiveTestSession] = useState<{ id: string; subject: string } | null>(null)
+  const [testError, setTestError] = useState<string | null>(null)
+  const qc = useQueryClient()
+
   const today = new Date()
   const dayIdx = today.getDay() === 0 ? 6 : today.getDay() - 1
   const dateStr = today.toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' })
 
+  const startMut = useMutation({
+    mutationFn: (assignmentId: number) =>
+      startSession({ subject: 'Test Session', assignment_id: assignmentId }),
+    onSuccess: (data) => {
+      setActiveTestSession({ id: data.id, subject: data.subject })
+      setTestError(null)
+      qc.invalidateQueries({ queryKey: ['sessions'] })
+    },
+    onError: (e: any) => setTestError(e?.response?.data?.detail ?? 'Failed to start session'),
+  })
+
+  const endMut = useMutation({
+    mutationFn: (sessionId: string) => endSession(sessionId),
+    onSuccess: () => {
+      setActiveTestSession(null)
+      setTestError(null)
+      qc.invalidateQueries({ queryKey: ['sessions'] })
+    },
+    onError: (e: any) => setTestError(e?.response?.data?.detail ?? 'Failed to end session'),
+  })
+
+  // Pick first available assignment for the test session
+  const firstAssignment = assignments[0]
+
   return (
     <div className="p-8 max-w-5xl mx-auto">
-      <div className="mb-8">
-        <h1 className="text-3xl font-black text-zinc-900">Today's Schedule</h1>
-        <p className="text-zinc-500 text-base mt-1">{DAYS[dayIdx]}, {dateStr}</p>
+      <div className="mb-8 flex items-start justify-between flex-wrap gap-4">
+        <div>
+          <h1 className="text-3xl font-black text-zinc-900">Today's Schedule</h1>
+          <p className="text-zinc-500 text-base mt-1">{DAYS[dayIdx]}, {dateStr}</p>
+        </div>
+
+        {/* ── Test session button ── */}
+        <div className="flex flex-col items-end gap-1">
+          {activeTestSession ? (
+            <button
+              onClick={() => endMut.mutate(activeTestSession.id)}
+              disabled={endMut.isPending}
+              className="flex items-center gap-2 bg-red-50 border-2 border-red-500 text-red-700 font-bold px-4 py-2 rounded-xl shadow-[2px_2px_0_0_#ef4444] hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 transition-all disabled:opacity-50">
+              <StopCircle size={16} />
+              {endMut.isPending ? 'Ending…' : `End Test Session`}
+            </button>
+          ) : (
+            <button
+              onClick={() => firstAssignment && startMut.mutate(firstAssignment.id)}
+              disabled={startMut.isPending || !firstAssignment}
+              title={!firstAssignment ? 'No assignments found' : 'Start a quick test session'}
+              className="flex items-center gap-2 bg-amber-50 border-2 border-amber-500 text-amber-800 font-bold px-4 py-2 rounded-xl shadow-[2px_2px_0_0_#f59e0b] hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed">
+              <FlaskConical size={16} />
+              {startMut.isPending ? 'Starting…' : 'Start Test Session'}
+            </button>
+          )}
+          {activeTestSession && (
+            <span className="text-xs text-green-700 font-semibold">● Active: {activeTestSession.subject}</span>
+          )}
+          {testError && <span className="text-xs text-red-600">{testError}</span>}
+        </div>
       </div>
 
       {isLoading && (

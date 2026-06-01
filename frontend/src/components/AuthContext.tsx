@@ -3,18 +3,23 @@ import { useQueryClient } from '@tanstack/react-query'
 import { login as apiLogin, getMe } from '../api/endpoints'
 
 interface AuthUser { id: string; full_name: string; role: string; is_super_admin: boolean }
-interface AuthCtx { user: AuthUser | null; login: (id: string, pw: string) => Promise<void>; logout: () => void }
+interface AuthCtx { user: AuthUser | null; loading: boolean; login: (id: string, pw: string) => Promise<void>; logout: () => void }
 
 const Ctx = createContext<AuthCtx>(null!)
 export const useAuth = () => useContext(Ctx)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null)
+  const [loading, setLoading] = useState(true)
   const qc = useQueryClient()
 
   useEffect(() => {
     const token = localStorage.getItem('token')
-    if (token) getMe().then(setUser).catch(() => localStorage.clear())
+    if (token) {
+      getMe().then(setUser).catch(() => localStorage.clear()).finally(() => setLoading(false))
+    } else {
+      setLoading(false)
+    }
   }, [])
 
   const login = async (identifier: string, password: string) => {
@@ -31,5 +36,5 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     qc.clear()
   }
 
-  return <Ctx.Provider value={{ user, login, logout }}>{children}</Ctx.Provider>
+  return <Ctx.Provider value={{ user, loading, login, logout }}>{children}</Ctx.Provider>
 }
