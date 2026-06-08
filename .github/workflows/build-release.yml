@@ -4,7 +4,8 @@ on:
   push:
     branches:
       - main 
-      - Kushagra   # change to your default branch if different
+      - Kushagra
+      - MOKSH # change to your default branch if different
   workflow_dispatch:  # lets you trigger manually from the Actions tab
 
 # Prevent concurrent builds on the same branch (e.g. rapid pushes)
