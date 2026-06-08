@@ -846,6 +846,7 @@ class _StudentPageState extends State<StudentPage> {
   bool? _proximityOk;
   bool? _rawProximityOk;
   DateTime? _rawProximityChangeAt;
+  Timer? _proximityDebounceTimer;
 
   // RSSI sliding window
   final List<int> _rssiWindow = [];
@@ -871,6 +872,7 @@ class _StudentPageState extends State<StudentPage> {
     _bleStatusSub?.cancel();
     _scanRetryTimer?.cancel();
     _sessionPollTimer?.cancel();
+    _proximityDebounceTimer?.cancel();
     _blePeripheral.stop();
     FlutterForegroundTask.stopService();
     super.dispose();
