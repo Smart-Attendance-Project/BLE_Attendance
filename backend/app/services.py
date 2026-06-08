@@ -34,36 +34,31 @@ def upsert_attendance(
     biometric_verified: bool,
     threshold: float = 0.75,
 ) -> Attendance:
-    ratio = compute_presence_ratio(db, session_id, student_user_id)
-
     stmt = select(Attendance).where(
         and_(Attendance.session_id == session_id, Attendance.student_user_id == student_user_id)
     )
     row = db.scalar(stmt)
 
     if row is None:
-        # If there are actual detection records, use the ratio to decide.
-        # If there are NO detections (teacher hasn't batch-submitted yet),
-        # do NOT assume present — the teacher's batch-submit at session end
-        # will set the definitive value based on actual BLE proximity data.
-        is_present = ratio >= threshold
+        # Since we use local batch-submit at the end of the session and do not upload
+        # real-time detection records to the database anymore, we trust the biometric verification
+        # as proof of presence at finalization time.
+        is_present = True if biometric_verified else False
 
         row = Attendance(
             session_id=session_id,
             student_user_id=student_user_id,
-            presence_ratio=ratio,
+            presence_ratio=1.0 if is_present else 0.0,
             is_present=is_present,
             biometric_verified=biometric_verified,
             finalized_at=datetime.utcnow() if biometric_verified else None,
         )
         db.add(row)
     else:
-        # Existing record: only update is_present from ratio if there are
-        # actual detection records.  If the teacher already set is_present
-        # (via override or batch-submit), preserve that decision.
-        if ratio > 0:
-            row.presence_ratio = ratio
-            row.is_present = ratio >= threshold
+        # Existing record: update is_present and ratio to True/1.0 if biometric is verified
+        if biometric_verified:
+            row.is_present = True
+            row.presence_ratio = 1.0
         # Always record biometric verification
         row.biometric_verified = biometric_verified
         row.finalized_at = datetime.utcnow() if biometric_verified else row.finalized_at
