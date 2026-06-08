@@ -340,6 +340,7 @@ class _TeacherPageState extends State<TeacherPage> {
   Map<String, String> _studentNames = {};
   Timer? _scanRetryTimer;
   Timer? _refreshTimer;
+  Timer? _scanCycleTimer;
   StreamSubscription<DiscoveredDevice>? _scanSub;
 
   // Today's schedule slots from server
@@ -367,6 +368,7 @@ class _TeacherPageState extends State<TeacherPage> {
     _blePeripheral.stop();
     _scanSub?.cancel();
     _scanRetryTimer?.cancel();
+    _scanCycleTimer?.cancel();
     _refreshTimer?.cancel();
     FlutterForegroundTask.stopService();
     super.dispose();
@@ -424,6 +426,7 @@ class _TeacherPageState extends State<TeacherPage> {
 
   void _startStudentScan() {
     _scanSub?.cancel();
+    _scanCycleTimer?.cancel();
     _isScanning = true;
     _scanSub = _ble.scanForDevices(
       withServices: const [],
@@ -448,6 +451,16 @@ class _TeacherPageState extends State<TeacherPage> {
       onError: (_) { if (mounted) setState(() => _isScanning = false); _scheduleStudentScanRetry(); },
       onDone: () { if (mounted) setState(() => _isScanning = false); _scheduleStudentScanRetry(); },
     );
+
+    // Periodically restart the scan every 4 seconds to bypass Android/ColorOS advertisement deduplication
+    _scanCycleTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (mounted && _sessionId != null && _isScanning) {
+        setState(() {
+          _isScanning = false;
+        });
+        _startStudentScan();
+      }
+    });
   }
 
   void _scheduleStudentScanRetry() {
@@ -890,6 +903,7 @@ class _StudentPageState extends State<StudentPage> {
   String? _scanError;
   Timer? _scanRetryTimer;
   Timer? _sessionPollTimer;
+  Timer? _scanCycleTimer;
   BleStatus _bleStatus = BleStatus.unknown;
 
   // Debounced proximity
@@ -921,6 +935,7 @@ class _StudentPageState extends State<StudentPage> {
     _scanSub?.cancel();
     _bleStatusSub?.cancel();
     _scanRetryTimer?.cancel();
+    _scanCycleTimer?.cancel();
     _sessionPollTimer?.cancel();
     _proximityDebounceTimer?.cancel();
     _blePeripheral.stop();
@@ -1040,6 +1055,7 @@ class _StudentPageState extends State<StudentPage> {
       return;
     }
     _scanRetryTimer?.cancel();
+    _scanCycleTimer?.cancel();
     await _scanSub?.cancel();
     setState(() {
       _scanning = true;
@@ -1105,6 +1121,16 @@ class _StudentPageState extends State<StudentPage> {
             }
           },
         );
+
+    // Periodically restart the scan every 4 seconds to bypass Android/ColorOS advertisement deduplication
+    _scanCycleTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (mounted && _scanning && _bleStatus == BleStatus.ready) {
+        setState(() {
+          _scanning = false;
+        });
+        _startScan();
+      }
+    });
   }
 
   void _updateDebouncedProximity(bool newValue) {
