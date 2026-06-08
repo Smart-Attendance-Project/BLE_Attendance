@@ -350,7 +350,7 @@ class _TeacherPageState extends State<TeacherPage> {
   DateTime _lastUiUpdate = DateTime.now();
   static const Duration _uiThrottle = Duration(seconds: 1);
   // Students who have completed biometric finalization
-  final Set<String> _finalizedStudentIds = {};
+  Set<String> _finalizedStudentIds = {};
   Timer? _summaryPollTimer;
 
   @override
@@ -1120,7 +1120,7 @@ class _StudentPageState extends State<StudentPage> {
 
   void _updateDebouncedProximity(bool newValue) {
     _proximityDebounceTimer?.cancel();
-    _proximityDebounceTimer = Timer(kProximityDebounceDuration, (_) {
+    _proximityDebounceTimer = Timer(kProximityDebounceDuration, () {
       if (!mounted) return;
       if (_proximityOk != newValue) {
         setState(() => _proximityOk = newValue);
@@ -1498,8 +1498,6 @@ class _StatusRow extends StatelessWidget {
 // ===========================================================================
 
 class ApiClient {
-  ApiClient();
-
   final Dio _dio = Dio(
     BaseOptions(
       baseUrl: kDefaultApiBaseUrl,
