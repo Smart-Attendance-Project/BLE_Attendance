@@ -181,8 +181,8 @@ def get_or_create(db, model, defaults=None, **kwargs):
 
 def main():
     Base.metadata.create_all(bind=engine)
-    with engine.begin() as conn:
-        conn.execute(text("ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'admin'"))
+    from app.main import _run_migrations
+    _run_migrations(engine)
 
     db = SessionLocal()
     try:

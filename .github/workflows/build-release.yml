@@ -3,7 +3,9 @@ name: Build & Release APK
 on:
   push:
     branches:
-      - main          # change to your default branch if different
+      - main 
+      - Kushagra
+      - MOKSH # change to your default branch if different
   workflow_dispatch:  # lets you trigger manually from the Actions tab
 
 # Prevent concurrent builds on the same branch (e.g. rapid pushes)

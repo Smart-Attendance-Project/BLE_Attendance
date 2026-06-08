@@ -347,6 +347,11 @@ class _TeacherPageState extends State<TeacherPage> {
 
   // Local student detection tally
   final Map<String, _StudentTally> _studentTallies = {};
+  DateTime _lastUiUpdate = DateTime.now();
+  static const Duration _uiThrottle = Duration(seconds: 1);
+  // Students who have completed biometric finalization
+  Set<String> _finalizedStudentIds = {};
+  Timer? _summaryPollTimer;
 
   @override
   void initState() {
@@ -367,6 +372,7 @@ class _TeacherPageState extends State<TeacherPage> {
     _scanSub?.cancel();
     _scanRetryTimer?.cancel();
     _refreshTimer?.cancel();
+    _summaryPollTimer?.cancel();
     FlutterForegroundTask.stopService();
     super.dispose();
   }
@@ -441,7 +447,11 @@ class _TeacherPageState extends State<TeacherPage> {
         tally.latestRssi = rssi;
         tally.latestAt = DateTime.now();
         tally.inRange = ok;
-        if (mounted) setState(() {});
+        final _now = DateTime.now();
+        if (mounted && _now.difference(_lastUiUpdate) >= _uiThrottle) {
+          _lastUiUpdate = _now;
+          setState(() {});
+        }
       },
       onError: (_) { if (mounted) setState(() => _isScanning = false); _scheduleStudentScanRetry(); },
       onDone: () { if (mounted) setState(() => _isScanning = false); _scheduleStudentScanRetry(); },
@@ -510,6 +520,7 @@ class _TeacherPageState extends State<TeacherPage> {
         if (mounted) setState(() => _summary = summary);
       } catch (_) {}
 
+      _summaryPollTimer?.cancel();
       if (mounted) {
         setState(() {
           _sessionId = null;
@@ -517,6 +528,7 @@ class _TeacherPageState extends State<TeacherPage> {
           _finalizationOpen = false;
           _showEndConfirm = false;
           _studentTallies.clear();
+          _finalizedStudentIds.clear();
         });
       }
     } catch (error) {
@@ -539,6 +551,29 @@ class _TeacherPageState extends State<TeacherPage> {
     } catch (_) {}
   }
 
+  Future<void> _loadAttendanceSummary() async {
+    final sid = _sessionId;
+    if (sid == null) return;
+    try {
+      final summary = await widget.api.getAttendanceSummary(sid);
+      if (!mounted) return;
+      final finalized = <String>{};
+      for (final rec in (summary['records'] as List? ?? [])) {
+        if (rec['biometric_verified'] == true) {
+          finalized.add(rec['student_id'] as String);
+        }
+      }
+      setState(() => _finalizedStudentIds = finalized);
+    } catch (_) {}
+  }
+
+  void _startSummaryPolling() {
+    _summaryPollTimer?.cancel();
+    _summaryPollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      _loadAttendanceSummary();
+    });
+  }
+
   Future<void> _openFinalization() async {
     final sessionId = _sessionId;
     if (sessionId == null) return;
@@ -547,6 +582,8 @@ class _TeacherPageState extends State<TeacherPage> {
       final session = await widget.api.openFinalization(sessionId);
       if (!mounted) return;
       setState(() => _finalizationOpen = (session['finalization_open'] as bool?) ?? true);
+      _startSummaryPolling();
+      _loadAttendanceSummary();
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Finalization opened for students.')));
     } catch (error) {
       if (!mounted) return;
@@ -557,6 +594,8 @@ class _TeacherPageState extends State<TeacherPage> {
   }
 
   Future<void> _logout() async {
+    _scanRetryTimer?.cancel();
+    _refreshTimer?.cancel();
     await _blePeripheral.stop();
     _scanSub?.cancel();
     FlutterForegroundTask.stopService();
@@ -582,7 +621,7 @@ class _TeacherPageState extends State<TeacherPage> {
         title: const Text('Teacher Dashboard', style: TextStyle(fontWeight: FontWeight.w700)),
         actions: [
           IconButton(
-            onPressed: () { _loadTodaySchedule(); if (_sessionId == null) _loadActiveSession(); },
+            onPressed: () { _loadTodaySchedule(); if (_sessionId == null) { _loadActiveSession(); } else { _loadAttendanceSummary(); } },
             icon: const Icon(Icons.refresh_rounded),
             tooltip: 'Refresh',
           ),
@@ -699,6 +738,15 @@ class _TeacherPageState extends State<TeacherPage> {
                   decoration: BoxDecoration(color: cs.primaryContainer, borderRadius: BorderRadius.circular(20)),
                   child: Text('${sortedStudents.length}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: cs.primary)),
                 ),
+                if (_finalizationOpen && _finalizedStudentIds.isNotEmpty) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(color: Colors.green.shade100, borderRadius: BorderRadius.circular(20)),
+                    child: Text('${_finalizedStudentIds.length} finalized',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.green.shade700)),
+                  ),
+                ],
               ]),
               const SizedBox(height: 8),
               Expanded(
@@ -742,6 +790,16 @@ class _TeacherPageState extends State<TeacherPage> {
                                   color: ratio >= 0.75 ? Colors.green : Colors.orange,
                                 ),
                               ),
+                              if (_finalizedStudentIds.contains(s.studentId))
+                                Container(
+                                  margin: const EdgeInsets.only(left: 6),
+                                  padding: const EdgeInsets.all(4),
+                                  decoration: BoxDecoration(
+                                    color: Colors.green.shade100,
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Icon(Icons.fingerprint, size: 16, color: Colors.green.shade700),
+                                ),
                             ]),
                           );
                         },
@@ -846,6 +904,7 @@ class _StudentPageState extends State<StudentPage> {
   bool? _proximityOk;
   bool? _rawProximityOk;
   DateTime? _rawProximityChangeAt;
+  Timer? _proximityDebounceTimer;
 
   // RSSI sliding window
   final List<int> _rssiWindow = [];
@@ -853,6 +912,8 @@ class _StudentPageState extends State<StudentPage> {
   // Local presence tracking (mirrors teacher-side logic)
   int _totalBeaconReadings = 0;
   int _inRangeHits = 0;
+  DateTime _lastUiUpdate = DateTime.now();
+  static const Duration _uiThrottle = Duration(seconds: 1);
   double get _hitRatio => _totalBeaconReadings > 0 ? _inRangeHits / _totalBeaconReadings : 0.0;
   bool get _meetsThreshold => _hitRatio >= kPresenceThreshold;
 
@@ -871,6 +932,7 @@ class _StudentPageState extends State<StudentPage> {
     _bleStatusSub?.cancel();
     _scanRetryTimer?.cancel();
     _sessionPollTimer?.cancel();
+    _proximityDebounceTimer?.cancel();
     _blePeripheral.stop();
     FlutterForegroundTask.stopService();
     super.dispose();
@@ -1023,15 +1085,17 @@ class _StudentPageState extends State<StudentPage> {
               // Debounce proximity changes
               _updateDebouncedProximity(ok);
 
-              setState(() {
-                _latestRssi = avgRssi;
-                _sessionId ??= 'ble-detected';
-                // Only use BLE-decoded subject if the server hasn't
-                // provided one yet (server data is more reliable).
-                if (_subject == null && payload['subject'] != null) {
-                  _subject = payload['subject'] as String;
-                }
-              });
+              final _now = DateTime.now();
+              if (_now.difference(_lastUiUpdate) >= _uiThrottle) {
+                _lastUiUpdate = _now;
+                setState(() {
+                  _latestRssi = avgRssi;
+                  _sessionId ??= 'ble-detected';
+                  if (_subject == null && payload['subject'] != null) {
+                    _subject = payload['subject'] as String;
+                  }
+                });
+              }
             }
           },
           onError: (error) {
@@ -1056,20 +1120,13 @@ class _StudentPageState extends State<StudentPage> {
   }
 
   void _updateDebouncedProximity(bool newValue) {
-    final now = DateTime.now();
-    if (_rawProximityOk != newValue) {
-      _rawProximityOk = newValue;
-      _rawProximityChangeAt = now;
-      // Do NOT apply immediately — wait for debounce to confirm stability
-    } else if (_rawProximityChangeAt != null &&
-        now.difference(_rawProximityChangeAt!) >= kProximityDebounceDuration) {
-      // Value has been stable for debounce duration — apply it
+    _proximityDebounceTimer?.cancel();
+    _proximityDebounceTimer = Timer(kProximityDebounceDuration, () {
+      if (!mounted) return;
       if (_proximityOk != newValue) {
         setState(() => _proximityOk = newValue);
       }
-    }
-    // First reading: only set after debounce window, not immediately
-    // (removed the _proximityOk ??= newValue that bypassed debounce)
+    });
   }
 
   Map<String, dynamic>? _decodeTeacherPayload(DiscoveredDevice device) {
@@ -1159,6 +1216,8 @@ class _StudentPageState extends State<StudentPage> {
   }
 
   Future<void> _logout() async {
+    _scanRetryTimer?.cancel();
+    _sessionPollTimer?.cancel();
     _scanSub?.cancel();
     _bleStatusSub?.cancel();
     _blePeripheral.stop();
@@ -1418,8 +1477,6 @@ class _StatusRow extends StatelessWidget {
 // ===========================================================================
 
 class ApiClient {
-  ApiClient();
-
   final Dio _dio = Dio(
     BaseOptions(
       baseUrl: kDefaultApiBaseUrl,
@@ -1430,6 +1487,17 @@ class ApiClient {
 
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
   String _baseUrl = kDefaultApiBaseUrl;
+
+  ApiClient() {
+    _dio.interceptors.add(InterceptorsWrapper(
+      onError: (error, handler) async {
+        if (error.response?.statusCode == 401) {
+          await clearSession();
+        }
+        handler.next(error);
+      },
+    ));
+  }
 
   String get baseUrl => _baseUrl;
 

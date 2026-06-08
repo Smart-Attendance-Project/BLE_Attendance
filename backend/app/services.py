@@ -41,12 +41,18 @@ def upsert_attendance(
     )
     row = db.scalar(stmt)
 
+<<<<<<< HEAD
     if row is None:
         # Both BLE proximity AND biometric verification are required.
         # A student is only marked present if they have sufficient
         # detection ratio AND have completed biometric verification.
         is_present = (ratio >= threshold) and biometric_verified
+=======
+    # is_present = True only when BOTH ratio >= threshold AND biometric verified
+    is_present = ratio >= threshold and biometric_verified
+>>>>>>> 1d30ac5c08195e57d7d64f783ac2bc68ea526c87
 
+    if row is None:
         row = Attendance(
             session_id=session_id,
             student_user_id=student_user_id,
@@ -57,7 +63,13 @@ def upsert_attendance(
         )
         db.add(row)
     else:
+<<<<<<< HEAD
         # Always record biometric verification first
+=======
+        if ratio > 0:
+            row.presence_ratio = ratio
+        row.is_present = is_present
+>>>>>>> 1d30ac5c08195e57d7d64f783ac2bc68ea526c87
         row.biometric_verified = biometric_verified
         row.finalized_at = datetime.utcnow() if biometric_verified else row.finalized_at
         # Update presence ratio from live detections if available
@@ -91,7 +103,11 @@ def build_attendance_if_missing(
         session_id=session_id,
         student_user_id=student_user_id,
         presence_ratio=ratio,
+<<<<<<< HEAD
         is_present=False,  # biometric not done → always absent
+=======
+        is_present=False,  # no biometric → not present
+>>>>>>> 1d30ac5c08195e57d7d64f783ac2bc68ea526c87
         biometric_verified=False,
     )
     db.add(row)

@@ -9,7 +9,10 @@ export function Nav() {
   const loc = useLocation()
   const qc = useQueryClient()
   const handleLogout = () => { logout(); nav('/login') }
-  const handleRefresh = () => qc.invalidateQueries()
+  const handleRefresh = () => {
+    qc.invalidateQueries()
+    qc.refetchQueries({ type: 'active' })
+  }
 
   const link = (to: string, label: string, Icon: React.ElementType) => {
     // exact match for dashboard, prefix match for others
