@@ -533,12 +533,41 @@ class _TeacherPageState extends State<TeacherPage> {
     try {
       final session = await widget.api.getActiveSession();
       if (!mounted) return;
+      final activeId = session['id'] as String;
+      final activeToken = session['token'] as String;
+      final activeSubject = (session['subject'] as String?) ?? 'Lecture';
+      final activeFinalization = (session['finalization_open'] as bool?) ?? false;
+
       setState(() {
-        _sessionId = session['id'] as String;
-        _token = session['token'] as String;
-        _finalizationOpen = (session['finalization_open'] as bool?) ?? false;
+        _sessionId = activeId;
+        _token = activeToken;
+        _finalizationOpen = activeFinalization;
       });
-      _fetchStudentNames(_sessionId!);
+
+      // Automatically start BLE advertising and scanning when session is recovered
+      if (!_isAdvertising) {
+        try {
+          final permsOk = await _ensureBlePermissions();
+          if (permsOk) {
+            await _ensureBluetoothEnabled();
+            final data = AdvertiseData(
+              serviceUuid: kTeacherServiceUuid,
+              includeDeviceName: false,
+              manufacturerId: kManufacturerId,
+              manufacturerData: Uint8List.fromList(
+                _encodeTeacherPayload(activeToken, activeSubject),
+              ),
+            );
+            await _blePeripheral.start(advertiseData: data);
+            _isAdvertising = true;
+            _startStudentScan();
+            _startForegroundService('Teaching: $activeSubject');
+            if (mounted) setState(() {});
+          }
+        } catch (_) {}
+      }
+
+      _fetchStudentNames(activeId);
     } catch (_) {}
   }
 
