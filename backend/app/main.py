@@ -71,6 +71,8 @@ def _run_migrations(engine):
                 conn.execute(text("ALTER TABLE users ADD COLUMN admin_id VARCHAR(16) UNIQUE"))
             if "is_super_admin" not in cols:
                 conn.execute(text("ALTER TABLE users ADD COLUMN is_super_admin BOOLEAN DEFAULT FALSE"))
+            if "token_version" not in cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN token_version INTEGER DEFAULT 0"))
 
 
 @app.on_event("startup")
@@ -114,7 +116,9 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     user = authenticate_user(db, payload.identifier, payload.password)
     if user is None:
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_access_token(subject=user.id)
+    user.token_version += 1
+    db.commit()
+    token = create_access_token(subject=user.id, token_version=user.token_version)
     return TokenResponse(access_token=token, role=user.role,
                          full_name=user.full_name, user_id=user.id)
 
@@ -417,13 +421,24 @@ def export_attendance_range(
     for col, s in enumerate(sessions, 2):
         ws.cell(row=1, column=col, value=s.starts_at.strftime("%d/%m/%Y"))
 
+    # Preload all attendance records in one query
+    session_ids = [s.id for s in sessions]
+    student_ids = [u.id for u in students]
+    att_rows = db.execute(
+        select(Attendance).where(
+            and_(
+                Attendance.session_id.in_(session_ids),
+                Attendance.student_user_id.in_(student_ids),
+            )
+        )
+    ).scalars().all()
+    att_map = {(a.session_id, a.student_user_id): a for a in att_rows}
+
     # Data rows
     for row, student in enumerate(students, 2):
         ws.cell(row=row, column=1, value=student.student_id)
         for col, s in enumerate(sessions, 2):
-            att = db.scalar(select(Attendance).where(
-                and_(Attendance.session_id == s.id, Attendance.student_user_id == student.id)
-            ))
+            att = att_map.get((s.id, student.id))
             ws.cell(row=row, column=col, value="P" if (att and att.is_present) else "A")
 
     output = io.BytesIO()
@@ -976,7 +991,8 @@ def _build_summary(db, session: LectureSession) -> SessionAttendanceSummary:
         )
         if att is None:
             ratio = compute_presence_ratio(db, session.id, user.id)
-            is_present = ratio >= 0.75
+            # Not finalized → not present regardless of ratio
+            is_present = False
             bio, overridden, reason = False, False, None
         else:
             bio, overridden, reason = att.biometric_verified, att.overridden_by_teacher, att.override_reason
@@ -984,10 +1000,10 @@ def _build_summary(db, session: LectureSession) -> SessionAttendanceSummary:
                 # Teacher manually set the status – respect it
                 ratio, is_present = att.presence_ratio, att.is_present
             else:
-                # Recalculate from live detections so the dashboard
-                # stays in sync with the Excel export
-                ratio = compute_presence_ratio(db, session.id, user.id)
-                is_present = ratio >= 0.75
+                # Use the stored decision (set by upsert_attendance where
+                # is_present = ratio >= 0.75 AND biometric_verified)
+                ratio = att.presence_ratio
+                is_present = att.is_present
         if is_present:
             present += 1
         records.append(AttendanceStudentSummary(

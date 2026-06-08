@@ -41,13 +41,10 @@ def upsert_attendance(
     )
     row = db.scalar(stmt)
 
-    if row is None:
-        # If there are actual detection records, use the ratio to decide.
-        # If there are NO detections (teacher hasn't batch-submitted yet),
-        # do NOT assume present — the teacher's batch-submit at session end
-        # will set the definitive value based on actual BLE proximity data.
-        is_present = ratio >= threshold
+    # is_present = True only when BOTH ratio >= threshold AND biometric verified
+    is_present = ratio >= threshold and biometric_verified
 
+    if row is None:
         row = Attendance(
             session_id=session_id,
             student_user_id=student_user_id,
@@ -58,13 +55,9 @@ def upsert_attendance(
         )
         db.add(row)
     else:
-        # Existing record: only update is_present from ratio if there are
-        # actual detection records.  If the teacher already set is_present
-        # (via override or batch-submit), preserve that decision.
         if ratio > 0:
             row.presence_ratio = ratio
-            row.is_present = ratio >= threshold
-        # Always record biometric verification
+        row.is_present = is_present
         row.biometric_verified = biometric_verified
         row.finalized_at = datetime.utcnow() if biometric_verified else row.finalized_at
 
@@ -91,7 +84,7 @@ def build_attendance_if_missing(
         session_id=session_id,
         student_user_id=student_user_id,
         presence_ratio=ratio,
-        is_present=ratio >= threshold,
+        is_present=False,  # no biometric → not present
         biometric_verified=False,
     )
     db.add(row)

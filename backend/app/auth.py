@@ -23,9 +23,9 @@ def verify_password(raw_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(raw_password, hashed_password)
 
 
-def create_access_token(subject: str) -> str:
+def create_access_token(subject: str, token_version: int = 0) -> str:
     expiry = datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_exp_minutes)
-    payload = {"sub": subject, "exp": expiry}
+    payload = {"sub": subject, "exp": expiry, "token_version": token_version}
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
@@ -52,7 +52,8 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
         user_id = payload.get("sub")
-        if user_id is None:
+        token_version = payload.get("token_version")
+        if user_id is None or token_version is None:
             raise credentials_error
     except JWTError as exc:
         raise credentials_error from exc
@@ -60,6 +61,12 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     user = db.get(User, user_id)
     if user is None:
         raise credentials_error
+    if user.token_version != token_version:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session expired, please login again",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return user
 
 
