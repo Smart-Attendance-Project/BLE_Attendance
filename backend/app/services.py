@@ -34,34 +34,39 @@ def upsert_attendance(
     biometric_verified: bool,
     threshold: float = 0.75,
 ) -> Attendance:
+    ratio = compute_presence_ratio(db, session_id, student_user_id)
+
     stmt = select(Attendance).where(
         and_(Attendance.session_id == session_id, Attendance.student_user_id == student_user_id)
     )
     row = db.scalar(stmt)
 
     if row is None:
-        # Since we use local batch-submit at the end of the session and do not upload
-        # real-time detection records to the database anymore, we trust the biometric verification
-        # as proof of presence at finalization time.
-        is_present = True if biometric_verified else False
+        # Both BLE proximity AND biometric verification are required.
+        # A student is only marked present if they have sufficient
+        # detection ratio AND have completed biometric verification.
+        is_present = (ratio >= threshold) and biometric_verified
 
         row = Attendance(
             session_id=session_id,
             student_user_id=student_user_id,
-            presence_ratio=1.0 if is_present else 0.0,
+            presence_ratio=ratio,
             is_present=is_present,
             biometric_verified=biometric_verified,
             finalized_at=datetime.utcnow() if biometric_verified else None,
         )
         db.add(row)
     else:
-        # Existing record: update is_present and ratio to True/1.0 if biometric is verified
-        if biometric_verified:
-            row.is_present = True
-            row.presence_ratio = 1.0
-        # Always record biometric verification
+        # Always record biometric verification first
         row.biometric_verified = biometric_verified
         row.finalized_at = datetime.utcnow() if biometric_verified else row.finalized_at
+        # Update presence ratio from live detections if available
+        if ratio > 0:
+            row.presence_ratio = ratio
+        # Both BLE proximity AND biometric are required for present.
+        # If the teacher already set is_present (via override or
+        # batch-submit), that will be handled by the override flag.
+        row.is_present = (row.presence_ratio >= threshold) and row.biometric_verified
 
     db.commit()
     db.refresh(row)
@@ -86,7 +91,7 @@ def build_attendance_if_missing(
         session_id=session_id,
         student_user_id=student_user_id,
         presence_ratio=ratio,
-        is_present=ratio >= threshold,
+        is_present=False,  # biometric not done → always absent
         biometric_verified=False,
     )
     db.add(row)

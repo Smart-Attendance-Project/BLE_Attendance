@@ -1083,7 +1083,8 @@ class _StudentPageState extends State<StudentPage> {
                   ? rssi
                   : (_rssiWindow.reduce((a, b) => a + b) / _rssiWindow.length)
                         .round();
-              final ok = avgRssi > kRssiThreshold;
+              // Use raw RSSI instead of average for tracking hits to match teacher's calculation
+              final ok = rssi > kRssiThreshold;
 
               // Track presence hits for threshold check
               _totalBeaconReadings++;
@@ -1217,16 +1218,13 @@ class _StudentPageState extends State<StudentPage> {
       final attendance = await widget.api.finalizeAttendance(sessionId);
       if (!mounted) return;
 
-      final isPresent = attendance['is_present'] == true;
+      // We don't need to check the exact response 'is_present' here
+      // per user request, just show a generic success message.
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            isPresent
-                ? '✅ Attendance finalized — You are marked present!'
-                : '❌ Attendance finalized — Not enough presence detected. Contact your teacher.',
-          ),
-          backgroundColor: isPresent ? const Color(0xFF16A34A) : const Color(0xFFDC2626),
-          duration: const Duration(seconds: 4),
+        const SnackBar(
+          content: Text('✅ Your presence is recorded'),
+          backgroundColor: Color(0xFF16A34A),
+          duration: Duration(seconds: 4),
         ),
       );
     } catch (error) {
@@ -1401,19 +1399,9 @@ class _StudentPageState extends State<StudentPage> {
                 const Divider(height: 16),
                 _StatusRow(icon: Icons.how_to_reg_rounded, label: 'Finalization',
                     value: _finalizationOpen
-                        ? (_meetsThreshold ? 'Open — tap button below' : 'Open — but presence too low')
+                        ? 'Open — tap button below'
                         : 'Waiting for teacher',
-                    active: _finalizationOpen && _meetsThreshold),
-                if (_totalBeaconReadings > 0) ...[
-                  const Divider(height: 16),
-                  _StatusRow(
-                    icon: Icons.pie_chart_rounded,
-                    label: 'Presence',
-                    value: '${(_hitRatio * 100).toStringAsFixed(0)}% (need ${(kPresenceThreshold * 100).toStringAsFixed(0)}%)',
-                    active: _meetsThreshold,
-                    isWarning: !_meetsThreshold,
-                  ),
-                ],
+                    active: _finalizationOpen),
                 if (_scanError != null) ...[
                   const Divider(height: 16),
                   _StatusRow(icon: Icons.warning_amber_rounded, label: 'Status', value: _scanError!, active: false, isWarning: true),
@@ -1427,21 +1415,12 @@ class _StudentPageState extends State<StudentPage> {
 
             const SizedBox(height: 16),
 
-            // Finalize button — disabled (gray) if presence is below threshold
+            // Finalize button
             FilledButton.icon(
-              onPressed: _finalizationOpen && _meetsThreshold ? _finalizeWithBiometric : null,
+              onPressed: _finalizationOpen ? _finalizeWithBiometric : null,
               icon: const Icon(Icons.fingerprint_rounded),
               label: const Text('Finalize Attendance (Biometric)'),
             ),
-            if (_finalizationOpen && !_meetsThreshold)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  'Your presence is ${(_hitRatio * 100).toStringAsFixed(0)}% — need at least ${(kPresenceThreshold * 100).toStringAsFixed(0)}% to finalize.',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13, fontWeight: FontWeight.w500),
-                ),
-              ),
 
             if (Platform.isAndroid) ...[
               const SizedBox(height: 10),
