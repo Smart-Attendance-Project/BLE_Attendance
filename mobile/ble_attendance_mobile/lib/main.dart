@@ -354,10 +354,14 @@ class _TeacherPageState extends State<TeacherPage> {
     _initForegroundTask();
     _loadTodaySchedule();
     _loadActiveSession();
-    // Refresh schedule + active session every 30s
-    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      _loadTodaySchedule();
-      if (_sessionId == null) _loadActiveSession();
+    // Refresh schedule + active session / summary
+    _refreshTimer = Timer.periodic(kTeacherPollInterval, (_) {
+      if (_sessionId == null) {
+        _loadTodaySchedule();
+        _loadActiveSession();
+      } else if (_finalizationOpen) {
+        _loadSessionSummary();
+      }
     });
   }
 
@@ -369,6 +373,15 @@ class _TeacherPageState extends State<TeacherPage> {
     _refreshTimer?.cancel();
     FlutterForegroundTask.stopService();
     super.dispose();
+  }
+
+  Future<void> _loadSessionSummary() async {
+    final sid = _sessionId;
+    if (sid == null) return;
+    try {
+      final summary = await widget.api.getAttendanceSummary(sid);
+      if (mounted) setState(() => _summary = summary);
+    } catch (_) {}
   }
 
   Future<void> _loadTodaySchedule() async {
@@ -429,8 +442,10 @@ class _TeacherPageState extends State<TeacherPage> {
       requireLocationServicesEnabled: false,
     ).listen(
       (device) {
-        final studentId = _extractStudentId(device);
-        if (studentId == null || _sessionId == null) return;
+        final parsed = _extractStudentData(device);
+        if (parsed == null || _sessionId == null) return;
+        final studentId = parsed['id'] as String;
+        final verified = parsed['verified'] as bool;
         final rssi = device.rssi;
         final ok = rssi > kRssiThreshold;
         final tally = _studentTallies.putIfAbsent(
@@ -441,6 +456,7 @@ class _TeacherPageState extends State<TeacherPage> {
         tally.latestRssi = rssi;
         tally.latestAt = DateTime.now();
         tally.inRange = ok;
+        if (verified) tally.biometricVerified = true;
         if (mounted) setState(() {});
       },
       onError: (_) { if (mounted) setState(() => _isScanning = false); _scheduleStudentScanRetry(); },
@@ -455,14 +471,17 @@ class _TeacherPageState extends State<TeacherPage> {
     });
   }
 
-  String? _extractStudentId(DiscoveredDevice device) {
+  Map<String, dynamic>? _extractStudentData(DiscoveredDevice device) {
     if (device.manufacturerData.isEmpty) return null;
     try {
       final bytes = device.manufacturerData;
       if (bytes.length < 4) return null;
       final rawId = utf8.decode(bytes.sublist(2), allowMalformed: true).trim();
-      if (rawId.length >= 5 && rawId.length <= 12 && RegExp(r'^[A-Z0-9]+$').hasMatch(rawId)) {
-        return rawId;
+      // Check for 'V' suffix indicating biometric verified
+      final verified = rawId.endsWith('V');
+      final cleanId = verified ? rawId.substring(0, rawId.length - 1) : rawId;
+      if (cleanId.length >= 5 && cleanId.length <= 12 && RegExp(r'^[A-Z0-9]+$').hasMatch(cleanId)) {
+        return {'id': cleanId, 'verified': verified};
       }
     } catch (_) {}
     return null;
@@ -547,6 +566,8 @@ class _TeacherPageState extends State<TeacherPage> {
       final session = await widget.api.openFinalization(sessionId);
       if (!mounted) return;
       setState(() => _finalizationOpen = (session['finalization_open'] as bool?) ?? true);
+      // Immediately fetch summary so biometric status appears right away
+      _loadSessionSummary();
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Finalization opened for students.')));
     } catch (error) {
       if (!mounted) return;
@@ -729,7 +750,25 @@ class _TeacherPageState extends State<TeacherPage> {
                               ),
                               const SizedBox(width: 10),
                               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                Text(s.studentId, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                                Row(children: [
+                                  Text(s.studentId, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                                  if (_finalizationOpen) ...[
+                                    const SizedBox(width: 8),
+                                    if (s.biometricVerified)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(4), border: Border.all(color: Colors.blue.shade200)),
+                                        child: const Text('Verified', style: TextStyle(fontSize: 10, color: Colors.blue, fontWeight: FontWeight.w600)),
+                                      )
+                                    else
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(color: Colors.orange.shade50, borderRadius: BorderRadius.circular(4), border: Border.all(color: Colors.orange.shade200)),
+                                        child: const Text('Not verified', style: TextStyle(fontSize: 10, color: Colors.orange, fontWeight: FontWeight.w600)),
+                                      ),
+                                  ],
+                                ]),
+                                const SizedBox(height: 2),
                                 Text('${s.hits}/${s.total} hits · RSSI ${s.latestRssi ?? '-'} · ${_timeAgo(s.latestAt)}',
                                     style: TextStyle(fontSize: 11, color: cs.onSurface.withAlpha(140))),
                               ])),
@@ -807,6 +846,7 @@ class _StudentTally {
   int? latestRssi;
   DateTime? latestAt;
   bool inRange = false;
+  bool biometricVerified = false;
 }
 
 // ===========================================================================
@@ -954,13 +994,21 @@ class _StudentPageState extends State<StudentPage> {
     }
   }
 
-  Future<void> _startStudentAdvertising() async {
-    if (_advertising || _studentIdentifier == null) return;
+  Future<void> _startStudentAdvertising({bool verified = false}) async {
+    if (_studentIdentifier == null) return;
     try {
+      // Stop current advertising before restarting with new data
+      if (_advertising) {
+        await _blePeripheral.stop();
+        _advertising = false;
+      }
+
       final permsOk = await _ensureBleAdvertisePermissions();
       if (!permsOk) return;
 
-      final idBytes = utf8.encode(_studentIdentifier!);
+      // Append 'V' flag if biometric has been verified
+      final payload = verified ? '${_studentIdentifier!}V' : _studentIdentifier!;
+      final idBytes = utf8.encode(payload);
       final data = AdvertiseData(
         serviceUuid: kStudentServiceUuid,
         includeDeviceName: false,
@@ -1140,6 +1188,9 @@ class _StudentPageState extends State<StudentPage> {
 
       final attendance = await widget.api.finalizeAttendance(sessionId);
       if (!mounted) return;
+
+      // Restart BLE advertising with 'V' flag so teacher sees verification
+      await _startStudentAdvertising(verified: true);
 
       // We don't need to check the exact response 'is_present' here
       // per user request, just show a generic success message.
