@@ -416,7 +416,7 @@ class _TeacherPageState extends State<TeacherPage> {
       _finalizationOpen = (session['finalization_open'] as bool?) ?? false;
 
       _globalTotalHits = 0;
-      _hitsPaused = false;
+      _hitsPaused = true;
       _studentTallies.clear();
       _verifiedStudents.clear();
       _studentNames = {};
@@ -563,9 +563,9 @@ class _TeacherPageState extends State<TeacherPage> {
     try {
       final decisions = _studentTallies.values.map((t) => {
         'student_id': t.studentId,
-        'is_present': t.hits > 0 && (t.hits / t.total) >= 0.75,
+        'is_present': t.hits > 0 && _globalTotalHits > 0 && (t.hits / _globalTotalHits) >= 0.75,
         'hits': t.hits,
-        'total': t.total,
+        'total': _globalTotalHits,
       }).toList();
 
       if (decisions.isNotEmpty) {
@@ -871,7 +871,7 @@ class _TeacherPageState extends State<TeacherPage> {
                         separatorBuilder: (_, __) => const SizedBox(height: 6),
                         itemBuilder: (context, index) {
                           final s = sortedStudents[index];
-                          final ratio = s.total > 0 ? s.hits / s.total : 0.0;
+                          final ratio = _globalTotalHits > 0 ? s.hits / _globalTotalHits : 0.0;
                           return Container(
                             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                             decoration: BoxDecoration(
@@ -897,7 +897,7 @@ class _TeacherPageState extends State<TeacherPage> {
                                   if (_finalizationOpen) ...[
                                     const SizedBox(width: 6),
                                     Builder(builder: (_) {
-                                      final ratio = s.total > 0 ? s.hits / s.total : 0.0;
+                                      final ratio = _globalTotalHits > 0 ? s.hits / _globalTotalHits : 0.0;
                                       final bool verified = _verifiedStudents[s.studentId] == true;
                                       String label;
                                       Color textColor;
@@ -915,7 +915,7 @@ class _TeacherPageState extends State<TeacherPage> {
                                     }),
                                   ],
                                 ]),
-                                Text('${s.hits}/${s.total} hits · RSSI ${s.latestRssi ?? '-'} · ${_timeAgo(s.latestAt)}',
+                                Text('${s.hits}/$_globalTotalHits hits · RSSI ${s.latestRssi ?? '-'} · ${_timeAgo(s.latestAt)}',
                                     style: TextStyle(fontSize: 11, color: cs.onSurface.withAlpha(140))),
                               ])),
                               SizedBox(
