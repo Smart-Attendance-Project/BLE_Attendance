@@ -509,7 +509,7 @@ class _TeacherPageState extends State<TeacherPage> {
       // Build final P/A list from local tallies and batch-submit
       final decisions = _studentTallies.values.map((t) => {
         'student_id': t.studentId,
-        'is_present': t.hits > 0 && (t.hits / t.total) >= 0.75,
+        'is_present': t.biometricVerified && t.hits > 0 && (t.hits / t.total) >= 0.75,
       }).toList();
 
       if (decisions.isNotEmpty) {
