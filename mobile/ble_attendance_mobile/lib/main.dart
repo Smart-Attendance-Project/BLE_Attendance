@@ -888,17 +888,34 @@ class _TeacherPageState extends State<TeacherPage> {
                               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                                 Row(children: [
                                   Text('${s.studentId}${_studentNames[s.studentId] != null ? ' • ${_studentNames[s.studentId]}' : ''}', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
-                                  if (_verifiedStudents[s.studentId] == true) ...[
+                                  // Status badge when finalization is open
+                                  if (_finalizationOpen) ...[
                                     const SizedBox(width: 6),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFFDCFCE7),
-                                        borderRadius: BorderRadius.circular(4),
-                                        border: Border.all(color: Colors.green.shade300),
-                                      ),
-                                      child: const Text('Verified', style: TextStyle(color: Colors.green, fontSize: 10, fontWeight: FontWeight.w700)),
-                                    ),
+                                    Builder(builder: (_) {
+                                      final ratio = s.total > 0 ? s.hits / s.total : 0.0;
+                                      final bool verified = _verifiedStudents[s.studentId] == true;
+                                      String label;
+                                      Color bg;
+                                      if (verified) {
+                                        label = 'Verified';
+                                        bg = const Color(0xFFDCFCE7);
+                                      } else if (ratio < 0.75) {
+                                        label = 'Not Eligible';
+                                        bg = const Color(0xFFFEE2E2);
+                                      } else {
+                                        label = 'Eligible but not verified';
+                                        bg = const Color(0xFFFFF4C2);
+                                      }
+                                      return Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: bg,
+                                          borderRadius: BorderRadius.circular(4),
+                                          border: Border.all(color: Colors.grey.shade400),
+                                        ),
+                                        child: Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700)),
+                                      );
+                                    }),
                                   ],
                                 ]),
                                 Text('${s.hits}/${s.total} hits · RSSI ${s.latestRssi ?? '-'} · ${_timeAgo(s.latestAt)}',
@@ -1198,6 +1215,7 @@ class _StudentPageState extends State<StudentPage> {
     _scanRetryTimer?.cancel();
     _scanCycleTimer?.cancel();
     await _scanSub?.cancel();
+
     setState(() {
       _scanning = true;
       _scanError = null;
