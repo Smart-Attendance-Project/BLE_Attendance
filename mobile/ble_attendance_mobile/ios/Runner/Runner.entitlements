@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Required for background BLE scanning (Central role) -->
+	<key>bluetooth-central</key>
+	<true/>
+	<!-- Required for background BLE advertising (Peripheral role) -->
+	<key>bluetooth-peripheral</key>
+	<true/>
+</dict>
+</plist>

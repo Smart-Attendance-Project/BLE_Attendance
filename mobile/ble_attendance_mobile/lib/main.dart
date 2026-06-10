@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:android_intent_plus/android_intent.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_ble_peripheral/flutter_ble_peripheral.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
@@ -31,6 +31,77 @@ const String kDefaultApiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
   defaultValue: 'https://ble-attendance.onrender.com',
 );
+
+// On Android, scan cycles should be at least 7s to avoid the 5-starts-per-30s
+// throttle. iOS has no such limit; shorter cycles improve responsiveness.
+Duration get kScanCycleInterval =>
+    Platform.isAndroid ? const Duration(seconds: 7) : const Duration(seconds: 4);
+
+// ---------------------------------------------------------------------------
+// iOS BLE Peripheral — platform channel wrapper
+// ---------------------------------------------------------------------------
+// On iOS, flutter_ble_peripheral cannot advertise service data or manufacturer
+// data. We use a native Swift CBPeripheralManager via a method channel instead.
+// On Android, this wrapper is unused; we use FlutterBlePeripheral directly.
+
+class IosBlePeripheral {
+  static const _channel = MethodChannel('ble_attendance/peripheral');
+
+  /// Starts advertising [payload] under [serviceUuid] via CoreBluetooth.
+  static Future<void> start({
+    required String serviceUuid,
+    required Uint8List payload,
+  }) async {
+    await _channel.invokeMethod<void>('startAdvertising', {
+      'serviceUuid': serviceUuid,
+      'payload': payload,
+    });
+  }
+
+  /// Stops CoreBluetooth peripheral advertising.
+  static Future<void> stop() async {
+    await _channel.invokeMethod<void>('stopAdvertising');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Cross-platform BLE payload helpers
+// ---------------------------------------------------------------------------
+// Encoding:
+//   Android — manufacturerData (2-byte company prefix + utf8 payload)
+//   iOS     — serviceData      (CBAdvertisementDataServiceDataKey = utf8 payload)
+//
+// Decoding (scanner side):
+//   Android — device.manufacturerData (strip leading 2 bytes)
+//   iOS     — device.serviceData[Uuid(serviceUuid)]
+
+/// Encode teacher payload: "TOKEN|SUBJECT|SEQ"
+Uint8List _encodePayload(String content) => Uint8List.fromList(utf8.encode(content));
+
+/// Decode BLE advertisement from a scanned device, platform-aware.
+/// Returns the raw utf8 payload string, or null if nothing matched.
+String? _decodePayload(DiscoveredDevice device, String serviceUuidStr) {
+  if (Platform.isAndroid) {
+    // Android: payload is in manufacturerData; first 2 bytes are company ID
+    final bytes = device.manufacturerData;
+    if (bytes.length < 4) return null;
+    try {
+      return utf8.decode(bytes.sublist(2));
+    } catch (_) {
+      return null;
+    }
+  } else {
+    // iOS: payload is in serviceData keyed by the service UUID
+    final uuid = Uuid.parse(serviceUuidStr);
+    final data = device.serviceData[uuid];
+    if (data == null || data.isEmpty) return null;
+    try {
+      return utf8.decode(data);
+    } catch (_) {
+      return null;
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // App entry point
@@ -376,7 +447,11 @@ class _TeacherPageState extends State<TeacherPage> {
 
   @override
   void dispose() {
-    _blePeripheral.stop();
+    if (Platform.isIOS) {
+      IosBlePeripheral.stop();
+    } else {
+      _blePeripheral.stop();
+    }
     _scanSub?.cancel();
     _scanRetryTimer?.cancel();
     _scanCycleTimer?.cancel();
@@ -454,15 +529,26 @@ class _TeacherPageState extends State<TeacherPage> {
   Future<void> _updateTeacherAdvertisingPayload(String subjectName) async {
     if (_token == null) return;
     try {
-      final payloadBytes = _encodeTeacherPayload(_token!, subjectName, _globalTotalHits);
-      final data = AdvertiseData(
-        serviceUuid: kTeacherServiceUuid,
-        includeDeviceName: false,
-        manufacturerId: kManufacturerId,
-        manufacturerData: Uint8List.fromList(payloadBytes),
-      );
-      await _blePeripheral.stop();
-      await _blePeripheral.start(advertiseData: data);
+      final content = _buildTeacherPayloadString(_token!, subjectName, _globalTotalHits);
+      final payloadBytes = _encodePayload(content);
+
+      if (Platform.isIOS) {
+        // iOS: use native CoreBluetooth channel — service data is visible to scanners
+        await IosBlePeripheral.start(
+          serviceUuid: kTeacherServiceUuid,
+          payload: payloadBytes,
+        );
+      } else {
+        // Android: use flutter_ble_peripheral with manufacturerData
+        final data = AdvertiseData(
+          serviceUuid: kTeacherServiceUuid,
+          includeDeviceName: false,
+          manufacturerId: kManufacturerId,
+          manufacturerData: Uint8List.fromList(payloadBytes),
+        );
+        await _blePeripheral.stop();
+        await _blePeripheral.start(advertiseData: data);
+      }
     } catch (_) {}
   }
 
@@ -500,13 +586,11 @@ class _TeacherPageState extends State<TeacherPage> {
       onDone: () { if (mounted) setState(() => _isScanning = false); _scheduleStudentScanRetry(); },
     );
 
-    // Periodically restart the scan every 7 seconds to bypass Android/ColorOS advertisement deduplication
-    // (Minimum 6-7 seconds is required to avoid triggering Android's scan throttle: max 5 starts per 30 seconds)
-    _scanCycleTimer = Timer.periodic(const Duration(seconds: 7), (_) {
+    // Periodically restart the scan to bypass advertisement deduplication.
+    // Android throttles to 5 starts/30s so minimum ~7s; iOS has no such limit.
+    _scanCycleTimer = Timer.periodic(kScanCycleInterval, (_) {
       if (mounted && _sessionId != null && _isScanning) {
-        setState(() {
-          _isScanning = false;
-        });
+        setState(() => _isScanning = false);
         _startStudentScan();
       }
     });
@@ -520,36 +604,35 @@ class _TeacherPageState extends State<TeacherPage> {
   }
 
   Map<String, dynamic>? _extractStudentPayload(DiscoveredDevice device) {
-    if (device.manufacturerData.isEmpty) return null;
     try {
-      final bytes = device.manufacturerData;
-      if (bytes.length < 4) return null;
-      final payload = utf8.decode(bytes.sublist(2), allowMalformed: true).trim();
-      if (!payload.contains('|')) return null;
+      final payload = _decodePayload(device, kStudentServiceUuid);
+      if (payload == null || !payload.contains('|')) return null;
       final parts = payload.split('|');
-      final studentId = parts[0];
-      final hits = parts.length > 1 ? int.tryParse(parts[1]) : null;
-      final total = parts.length > 2 ? int.tryParse(parts[2]) : null;
-      final verified = parts.length > 3 && parts[3] == 'V';
+      final studentId = parts[0].trim();
+      final hits = parts.length > 1 ? int.tryParse(parts[1].trim()) : null;
+      final total = parts.length > 2 ? int.tryParse(parts[2].trim()) : null;
+      final verified = parts.length > 3 && parts[3].trim() == 'V';
 
-      if (studentId.length >= 5 && studentId.length <= 12 && RegExp(r'^[A-Z0-9]+$').hasMatch(studentId)) {
-        if (hits != null && total != null) {
-          return {
-            'student_id': studentId,
-            'hits': hits,
-            'total': total,
-            'verified': verified,
-          };
-        }
+      if (studentId.length >= 5 &&
+          studentId.length <= 12 &&
+          RegExp(r'^[A-Z0-9]+$').hasMatch(studentId) &&
+          hits != null &&
+          total != null) {
+        return {
+          'student_id': studentId,
+          'hits': hits,
+          'total': total,
+          'verified': verified,
+        };
       }
     } catch (_) {}
     return null;
   }
 
-  List<int> _encodeTeacherPayload(String token, String subject, int seq) {
+  String _buildTeacherPayloadString(String token, String subject, int seq) {
     final tokenPart = token.length > 16 ? token.substring(0, 16) : token;
     final subjectPart = subject.length > 10 ? subject.substring(0, 10) : subject;
-    return utf8.encode('$tokenPart|$subjectPart|$seq');
+    return '$tokenPart|$subjectPart|$seq';
   }
 
   Future<void> _endSession() async {
@@ -578,7 +661,11 @@ class _TeacherPageState extends State<TeacherPage> {
 
       await widget.api.endSession(sessionId!);
       _teacherAdvertiseTimer?.cancel();
-      await _blePeripheral.stop();
+      if (Platform.isIOS) {
+        await IosBlePeripheral.stop();
+      } else {
+        await _blePeripheral.stop();
+      }
       _scanSub?.cancel();
       _isAdvertising = false;
       _isScanning = false;
@@ -672,7 +759,11 @@ class _TeacherPageState extends State<TeacherPage> {
     });
     if (_hitsPaused) {
       // Stop advertising when hits are paused
-      _blePeripheral.stop();
+      if (Platform.isIOS) {
+        IosBlePeripheral.stop();
+      } else {
+        _blePeripheral.stop();
+      }
     } else {
       // Resume advertising with current payload
       final subjectName = _selectedSlot?['subject_name'] as String? ?? '';
@@ -692,7 +783,11 @@ class _TeacherPageState extends State<TeacherPage> {
         _hitsPaused = true; // Auto-pause hits on finalization
       });
       _teacherAdvertiseTimer?.cancel();
-      await _blePeripheral.stop();
+      if (Platform.isIOS) {
+        await IosBlePeripheral.stop();
+      } else {
+        await _blePeripheral.stop();
+      }
       _isAdvertising = false;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Finalization opened for students.')));
     } catch (error) {
@@ -705,7 +800,11 @@ class _TeacherPageState extends State<TeacherPage> {
 
   Future<void> _logout() async {
     _teacherAdvertiseTimer?.cancel();
-    await _blePeripheral.stop();
+    if (Platform.isIOS) {
+      await IosBlePeripheral.stop();
+    } else {
+      await _blePeripheral.stop();
+    }
     _scanSub?.cancel();
     FlutterForegroundTask.stopService();
     await widget.api.clearSession();
@@ -1080,7 +1179,11 @@ class _StudentPageState extends State<StudentPage> {
     _scanCycleTimer?.cancel();
     _sessionPollTimer?.cancel();
     _proximityDebounceTimer?.cancel();
-    _blePeripheral.stop();
+    if (Platform.isIOS) {
+      IosBlePeripheral.stop();
+    } else {
+      _blePeripheral.stop();
+    }
     FlutterForegroundTask.stopService();
     super.dispose();
   }
@@ -1239,15 +1342,23 @@ class _StudentPageState extends State<StudentPage> {
     try {
       final vFlag = _biometricDone ? '|V' : '';
       final payloadStr = '$_studentIdentifier|$_inRangeHits|$_totalBeaconReadings$vFlag';
-      final idBytes = utf8.encode(payloadStr);
-      final data = AdvertiseData(
-        serviceUuid: kStudentServiceUuid,
-        includeDeviceName: false,
-        manufacturerId: kManufacturerId,
-        manufacturerData: Uint8List.fromList(idBytes),
-      );
-      await _blePeripheral.stop();
-      await _blePeripheral.start(advertiseData: data);
+      final payloadBytes = _encodePayload(payloadStr);
+
+      if (Platform.isIOS) {
+        await IosBlePeripheral.start(
+          serviceUuid: kStudentServiceUuid,
+          payload: payloadBytes,
+        );
+      } else {
+        final data = AdvertiseData(
+          serviceUuid: kStudentServiceUuid,
+          includeDeviceName: false,
+          manufacturerId: kManufacturerId,
+          manufacturerData: payloadBytes,
+        );
+        await _blePeripheral.stop();
+        await _blePeripheral.start(advertiseData: data);
+      }
     } catch (_) {}
   }
 
@@ -1348,9 +1459,10 @@ class _StudentPageState extends State<StudentPage> {
           },
         );
 
-    // Periodically restart the scan every 7 seconds to bypass Android/ColorOS advertisement deduplication
-    // (Minimum 6-7 seconds is required to avoid triggering Android's scan throttle: max 5 starts per 30 seconds)
-    _scanCycleTimer = Timer.periodic(const Duration(seconds: 7), (_) {
+    // Periodically restart the scan to bypass advertisement deduplication.
+    // Android: 7s minimum to avoid the 5-starts-per-30s OS throttle.
+    // iOS: shorter cycle is fine.
+    _scanCycleTimer = Timer.periodic(kScanCycleInterval, (_) {
       if (mounted && _scanning && _bleStatus == BleStatus.ready) {
         setState(() {
           _scanning = false;
@@ -1374,13 +1486,9 @@ class _StudentPageState extends State<StudentPage> {
   }
 
   Map<String, dynamic>? _decodeTeacherPayload(DiscoveredDevice device) {
-    if (device.manufacturerData.isEmpty) return null;
     try {
-      final bytes = device.manufacturerData;
-      if (bytes.length < 4) return null;
-      // Strict decode — reject garbled BLE noise instead of replacing chars.
-      final payload = utf8.decode(bytes.sublist(2));
-      if (!payload.contains('|')) return null;
+      final payload = _decodePayload(device, kTeacherServiceUuid);
+      if (payload == null || !payload.contains('|')) return null;
       final parts = payload.split('|');
       final token = parts[0];
       final subject = parts.length > 1 ? parts[1].trim() : null;
@@ -1388,14 +1496,11 @@ class _StudentPageState extends State<StudentPage> {
 
       // Validate: token and subject must be printable (no control chars).
       if (token.isEmpty || RegExp(r'[\x00-\x1F]').hasMatch(token)) return null;
-      if (subject != null && (subject.isEmpty || RegExp(r'[\x00-\x1F]').hasMatch(subject))) {
+      if (subject != null &&
+          (subject.isEmpty || RegExp(r'[\x00-\x1F]').hasMatch(subject))) {
         return {'token': token, 'subject': null, 'seq': seq};
       }
-      return {
-        'token': token,
-        'subject': subject,
-        'seq': seq,
-      };
+      return {'token': token, 'subject': subject, 'seq': seq};
     } catch (_) {}
     return null;
   }
@@ -1469,7 +1574,11 @@ class _StudentPageState extends State<StudentPage> {
   Future<void> _logout() async {
     _scanSub?.cancel();
     _bleStatusSub?.cancel();
-    _blePeripheral.stop();
+    if (Platform.isIOS) {
+      await IosBlePeripheral.stop();
+    } else {
+      _blePeripheral.stop();
+    }
     FlutterForegroundTask.stopService();
     await widget.api.clearSession();
     if (!mounted) return;
@@ -1931,6 +2040,13 @@ class ApiClient {
 // ===========================================================================
 
 Future<bool> _ensureBlePermissions() async {
+  if (Platform.isIOS) {
+    // On iOS 13+, Bluetooth access is a single permission; the OS will prompt
+    // automatically when CoreBluetooth is first used. permission_handler just
+    // checks the current status.
+    final status = await Permission.bluetooth.request();
+    return status.isGranted || status.isLimited;
+  }
   final bleStatuses = await [
     Permission.bluetoothScan,
     Permission.bluetoothConnect,
@@ -1946,6 +2062,10 @@ Future<bool> _ensureBlePermissions() async {
 }
 
 Future<bool> _ensureBleAdvertisePermissions() async {
+  if (Platform.isIOS) {
+    final status = await Permission.bluetooth.request();
+    return status.isGranted || status.isLimited;
+  }
   final bleStatuses = await [
     Permission.bluetoothAdvertise,
     Permission.bluetoothConnect,
@@ -1958,6 +2078,10 @@ Future<bool> _ensureBleAdvertisePermissions() async {
 }
 
 Future<bool> _ensureBleScanPermissions() async {
+  if (Platform.isIOS) {
+    final status = await Permission.bluetooth.request();
+    return status.isGranted || status.isLimited;
+  }
   final bleStatuses = await [
     Permission.bluetoothScan,
     Permission.bluetoothConnect,
