@@ -481,6 +481,7 @@ class _TeacherPageState extends State<TeacherPage> {
         final studentId = parsed['student_id'] as String;
         final hits = parsed['hits'] as int;
         final total = parsed['total'] as int;
+        final verified = parsed['verified'] as bool;
         final rssi = device.rssi;
         final ok = rssi > kRssiThreshold;
 
@@ -492,6 +493,7 @@ class _TeacherPageState extends State<TeacherPage> {
         tally.latestRssi = rssi;
         tally.latestAt = DateTime.now();
         tally.inRange = ok;
+        if (verified) tally.biometricVerified = true;
         if (mounted) setState(() {});
       },
       onError: (_) { if (mounted) setState(() => _isScanning = false); _scheduleStudentScanRetry(); },
@@ -528,6 +530,7 @@ class _TeacherPageState extends State<TeacherPage> {
       final studentId = parts[0];
       final hits = parts.length > 1 ? int.tryParse(parts[1]) : null;
       final total = parts.length > 2 ? int.tryParse(parts[2]) : null;
+      final verified = parts.length > 3 && parts[3] == 'V';
 
       if (studentId.length >= 5 && studentId.length <= 12 && RegExp(r'^[A-Z0-9]+$').hasMatch(studentId)) {
         if (hits != null && total != null) {
@@ -535,6 +538,7 @@ class _TeacherPageState extends State<TeacherPage> {
             'student_id': studentId,
             'hits': hits,
             'total': total,
+            'verified': verified,
           };
         }
       }
@@ -898,7 +902,8 @@ class _TeacherPageState extends State<TeacherPage> {
                                     const SizedBox(width: 6),
                                     Builder(builder: (_) {
                                       final ratio = _globalTotalHits > 0 ? s.hits / _globalTotalHits : 0.0;
-                                      final bool verified = _verifiedStudents[s.studentId] == true;
+                                      // Use BLE flag first, fall back to server-polled status
+                                      final bool verified = s.biometricVerified || (_verifiedStudents[s.studentId] == true);
                                       String label;
                                       Color textColor;
                                       Color bgColor;
@@ -1004,6 +1009,7 @@ class _StudentTally {
   int? latestRssi;
   DateTime? latestAt;
   bool inRange = false;
+  bool biometricVerified = false;
 }
 
 // ===========================================================================
@@ -1053,6 +1059,7 @@ class _StudentPageState extends State<StudentPage> {
   // Local presence tracking (mirrors teacher-side logic)
   int _totalBeaconReadings = 0;
   int _inRangeHits = 0;
+  bool _biometricDone = false;
   double get _hitRatio => _totalBeaconReadings > 0 ? _inRangeHits / _totalBeaconReadings : 0.0;
   bool get _meetsThreshold => _hitRatio >= kPresenceThreshold;
 
@@ -1153,6 +1160,7 @@ class _StudentPageState extends State<StudentPage> {
       if (_sessionId != null && _sessionId != newId && _sessionId != 'ble-detected') {
         _totalBeaconReadings = 0;
         _inRangeHits = 0;
+        _biometricDone = false;
         _rssiWindow.clear();
         _proximityOk = null;
         _rawProximityOk = null;
@@ -1178,6 +1186,7 @@ class _StudentPageState extends State<StudentPage> {
         if (_sessionId != null && _sessionId != 'ble-detected' && mounted) {
           _totalBeaconReadings = 0;
           _inRangeHits = 0;
+          _biometricDone = false;
           _rssiWindow.clear();
           _proximityOk = null;
           _rawProximityOk = null;
@@ -1228,7 +1237,8 @@ class _StudentPageState extends State<StudentPage> {
   Future<void> _updateStudentAdvertising() async {
     if (_studentIdentifier == null) return;
     try {
-      final payloadStr = '$_studentIdentifier|$_inRangeHits|$_totalBeaconReadings';
+      final vFlag = _biometricDone ? '|V' : '';
+      final payloadStr = '$_studentIdentifier|$_inRangeHits|$_totalBeaconReadings$vFlag';
       final idBytes = utf8.encode(payloadStr);
       final data = AdvertiseData(
         serviceUuid: kStudentServiceUuid,
@@ -1434,6 +1444,10 @@ class _StudentPageState extends State<StudentPage> {
 
       final attendance = await widget.api.finalizeAttendance(sessionId);
       if (!mounted) return;
+
+      // Set biometric done flag and restart BLE advertising with V flag
+      _biometricDone = true;
+      await _updateStudentAdvertising();
 
       // We don't need to check the exact response 'is_present' here
       // per user request, just show a generic success message.
