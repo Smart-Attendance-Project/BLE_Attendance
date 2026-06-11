@@ -10,6 +10,7 @@ if ROOT not in sys.path:
 from sqlalchemy import select, text
 from app.auth import hash_password
 from app.database import Base, SessionLocal, engine
+from app.main import _run_migrations
 from app.models import (
     Batch, Branch, Division, DivisionStudent, ScheduleSlot, Semester,
     Subject, TeacherAssignment, User, UserRole,
@@ -181,8 +182,7 @@ def get_or_create(db, model, defaults=None, **kwargs):
 
 def main():
     Base.metadata.create_all(bind=engine)
-    with engine.begin() as conn:
-        conn.execute(text("ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'admin'"))
+    _run_migrations(engine)  # handles ALTER TYPE + column migrations safely
 
     db = SessionLocal()
     try:

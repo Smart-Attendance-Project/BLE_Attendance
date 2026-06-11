@@ -54,12 +54,20 @@ def _run_migrations(engine):
     inspector = inspect(engine)
     tables = inspector.get_table_names()
 
-    with engine.begin() as conn:
+    # ALTER TYPE must run outside any transaction block on PostgreSQL —
+    # if it errors (e.g. value already exists on older PG without IF NOT EXISTS
+    # support, or on SQLite), the connection would be left in an aborted state,
+    # causing every subsequent DDL statement in the same transaction to silently
+    # fail.  Using AUTOCOMMIT isolation level gives us a bare connection with no
+    # wrapping transaction, so the error is fully isolated.
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
         try:
             conn.execute(text("ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'admin'"))
         except Exception:
-            pass  # SQLite doesn't support ALTER TYPE
+            pass  # value already present, or SQLite (no enum types)
 
+    # All remaining DDL runs in its own clean transaction.
+    with engine.begin() as conn:
         if "sessions" in tables:
             cols = {c["name"] for c in inspector.get_columns("sessions")}
             if "finalization_open" not in cols:
