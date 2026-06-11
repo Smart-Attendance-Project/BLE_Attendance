@@ -24,7 +24,7 @@ class FaceRecognizer {
 
   /// Initialise the TFLite interpreter from the bundled asset.
   Future<void> init() async {
-    _interpreter = await Interpreter.fromAsset('mobilefacenet.tflite');
+    _interpreter = await Interpreter.fromAsset('assets/mobilefacenet.tflite');
   }
 
   /// Dispose of the interpreter to free native memory.
