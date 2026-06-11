@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     Boolean, Date, DateTime, Enum as SqlEnum, Float, ForeignKey,
-    Integer, String, Time, UniqueConstraint,
+    Integer, JSON, String, Time, UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -30,6 +30,8 @@ class User(Base):
     biometric_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     is_super_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    face_embedding: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    face_reg_timestamps: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
 class Semester(Base):

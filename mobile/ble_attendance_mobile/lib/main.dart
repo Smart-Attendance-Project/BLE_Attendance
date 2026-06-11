@@ -10,8 +10,10 @@ import 'package:flutter_ble_peripheral/flutter_ble_peripheral.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:local_auth/local_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
+
+import 'face_registration_page.dart';
+import 'face_verification_dialog.dart';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -188,6 +190,21 @@ class _LoginPageState extends State<LoginPage> {
           MaterialPageRoute(builder: (_) => TeacherPage(api: _api)),
         );
       } else {
+        // Sync face profile from server if available
+        try {
+          final faceProfile = await _api.getFaceProfile();
+          if (faceProfile != null && faceProfile['embedding'] != null) {
+            const storage = FlutterSecureStorage();
+            final localFace = await storage.read(key: 'face_registered');
+            if (localFace != 'true') {
+              await storage.write(key: 'face_embedding', value: jsonEncode(faceProfile['embedding']));
+              await storage.write(key: 'face_registered', value: 'true');
+            }
+          }
+        } catch (_) {
+          // Non-critical — face sync failure shouldn't block login
+        }
+        if (!mounted) return;
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => StudentPage(api: _api)),
         );
@@ -1028,7 +1045,6 @@ class StudentPage extends StatefulWidget {
 class _StudentPageState extends State<StudentPage> {
   final FlutterReactiveBle _ble = FlutterReactiveBle();
   final FlutterBlePeripheral _blePeripheral = FlutterBlePeripheral();
-  final LocalAuthentication _localAuth = LocalAuthentication();
 
   StreamSubscription<DiscoveredDevice>? _scanSub;
   StreamSubscription<BleStatus>? _bleStatusSub;
@@ -1061,6 +1077,7 @@ class _StudentPageState extends State<StudentPage> {
   int _totalBeaconReadings = 0;
   int _inRangeHits = 0;
   bool _biometricDone = false;
+  bool _faceRegistered = false;
   double get _hitRatio => _totalBeaconReadings > 0 ? _inRangeHits / _totalBeaconReadings : 0.0;
   bool get _meetsThreshold => _hitRatio >= kPresenceThreshold;
 
@@ -1069,6 +1086,7 @@ class _StudentPageState extends State<StudentPage> {
     super.initState();
     _initForegroundTask();
     _watchBleStatus();
+    _loadFaceRegistrationStatus();
     _bootstrap();
     _startSessionPolling();
   }
@@ -1414,16 +1432,15 @@ class _StudentPageState extends State<StudentPage> {
     });
   }
 
-  Future<void> _finalizeWithBiometric() async {
-    final sessionId = _sessionId;
-    if (sessionId == null || sessionId == 'ble-detected') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Need server connection to finalize. Check internet.'),
-        ),
-      );
-      return;
+  Future<void> _loadFaceRegistrationStatus() async {
+    const storage = FlutterSecureStorage();
+    final registered = await storage.read(key: 'face_registered');
+    if (mounted) {
+      setState(() => _faceRegistered = registered == 'true');
     }
+  }
+
+  Future<void> _finalizeWithBiometric() async {
     if (!_finalizationOpen) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -1433,42 +1450,92 @@ class _StudentPageState extends State<StudentPage> {
       return;
     }
 
-    try {
-      final canAuth = await _localAuth.canCheckBiometrics ||
-          await _localAuth.isDeviceSupported();
-      if (!canAuth) {
-        throw Exception(
-          'Biometric/passcode auth is not available on this device.',
-        );
-      }
-
-      final success = await _localAuth.authenticate(
-        localizedReason: 'Authenticate to finalize attendance',
-        biometricOnly: false,
-      );
-      if (!success) return;
-
-      final attendance = await widget.api.finalizeAttendance(sessionId);
+    // Request camera permission
+    final camStatus = await Permission.camera.request();
+    if (!camStatus.isGranted) {
       if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Camera permission is required for face verification.')),
+      );
+      return;
+    }
 
-      // Set biometric done flag and restart BLE advertising with V flag
+    if (!_faceRegistered) {
+      // Navigate to face registration first
+      if (!mounted) return;
+      final registered = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(builder: (_) => FaceRegistrationPage(
+          onUpload: (embedding) async {
+            await widget.api.registerFace(embedding);
+            return true;
+          },
+        )),
+      );
+      if (registered == true) {
+        setState(() => _faceRegistered = true);
+        // After registration, immediately proceed to verification
+      } else {
+        return; // User cancelled registration
+      }
+    }
+
+    // Navigate to face verification
+    if (!mounted) return;
+    final verified = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => const FaceVerificationDialog()),
+    );
+
+    if (verified == true) {
+      // Face matched — set flag and broadcast via BLE
       _biometricDone = true;
       await _updateStudentAdvertising();
 
-      // We don't need to check the exact response 'is_present' here
-      // per user request, just show a generic success message.
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('✅ Your presence is recorded'),
+          content: Text('✅ Face verified — your presence is recorded'),
           backgroundColor: Color(0xFF16A34A),
           duration: Duration(seconds: 4),
         ),
       );
-    } catch (error) {
+    } else if (verified == false) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(_friendlyError(error))));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('❌ Face verification failed'),
+          backgroundColor: Color(0xFFDC2626),
+          duration: Duration(seconds: 4),
+        ),
+      );
+    }
+  }
+
+  Future<void> _reRegisterFace() async {
+    // Request camera permission
+    final camStatus = await Permission.camera.request();
+    if (!camStatus.isGranted) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Camera permission is required.')),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+    final registered = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => FaceRegistrationPage(
+        onUpload: (embedding) async {
+          // Server enforces 2/month limit — will throw 429 if exceeded
+          await widget.api.reRegisterFace(embedding);
+          return true;
+        },
+      )),
+    );
+    if (registered == true && mounted) {
+      setState(() => _faceRegistered = true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Face re-registered successfully.')),
+      );
     }
   }
 
@@ -1567,8 +1634,21 @@ class _StudentPageState extends State<StudentPage> {
         title: const Text('Student Dashboard', style: TextStyle(fontWeight: FontWeight.w700)),
         actions: [
           IconButton(onPressed: _loadActiveSession, icon: const Icon(Icons.refresh_rounded), tooltip: 'Refresh'),
-          IconButton(onPressed: _showChangePasswordDialog, icon: const Icon(Icons.key_rounded)),
-          IconButton(onPressed: _logout, icon: const Icon(Icons.logout_rounded)),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert_rounded),
+            onSelected: (value) {
+              switch (value) {
+                case 'password': _showChangePasswordDialog(); break;
+                case 'reregister': _reRegisterFace(); break;
+                case 'logout': _logout(); break;
+              }
+            },
+            itemBuilder: (_) => [
+              const PopupMenuItem(value: 'password', child: Text('Change Password')),
+              const PopupMenuItem(value: 'reregister', child: Text('Re-register Face')),
+              const PopupMenuItem(value: 'logout', child: Text('Logout')),
+            ],
+          ),
         ],
       ),
       body: SingleChildScrollView(
@@ -1663,8 +1743,8 @@ class _StudentPageState extends State<StudentPage> {
                       }
                     }
                   : null,
-              icon: const Icon(Icons.fingerprint_rounded),
-              label: const Text('Finalize Attendance (Biometric)'),
+              icon: Icon(_biometricDone ? Icons.check_circle_rounded : Icons.face_rounded),
+              label: Text(_biometricDone ? 'Attendance Verified ✅' : 'Finalize Attendance (Face Scan)'),
             ),
 
             if (Platform.isAndroid) ...[
@@ -1917,6 +1997,22 @@ class ApiClient {
         'old_password': oldPassword,
         'new_password': newPassword,
       });
+
+  // Face profile
+  Future<Map<String, dynamic>> registerFace(List<double> embedding) =>
+      _authedPost('/auth/register-face', {'embedding': embedding});
+
+  Future<Map<String, dynamic>?> getFaceProfile() async {
+    try {
+      return await _authedGet('/auth/face-profile');
+    } catch (e) {
+      if (e is DioException && e.response?.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> reRegisterFace(List<double> embedding) =>
+      _authedPost('/auth/re-register-face', {'embedding': embedding});
 
   // Excel download
   Future<List<int>> downloadAttendanceExcel(String sessionId) async {

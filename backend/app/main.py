@@ -74,6 +74,10 @@ def _run_migrations(engine):
                 conn.execute(text("ALTER TABLE users ADD COLUMN admin_id VARCHAR(16) UNIQUE"))
             if "is_super_admin" not in cols:
                 conn.execute(text("ALTER TABLE users ADD COLUMN is_super_admin BOOLEAN DEFAULT FALSE"))
+            if "face_embedding" not in cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN face_embedding JSON"))
+            if "face_reg_timestamps" not in cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN face_reg_timestamps JSON"))
 
 
 @app.on_event("startup")
@@ -144,6 +148,71 @@ def change_password(
     user.password_hash = hash_password(new_pw)
     db.commit()
     return {"message": "Password changed successfully"}
+
+
+MAX_FACE_REGISTRATIONS_PER_MONTH = 2
+
+
+@app.post("/auth/register-face")
+def register_face(
+    payload: dict,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Save face embedding to DB. Called on first registration."""
+    embedding = payload.get("embedding")
+    if not embedding or not isinstance(embedding, list):
+        raise HTTPException(status_code=422, detail="embedding must be a list of floats")
+
+    now = _now_ist()
+    user.face_embedding = embedding
+    timestamps = user.face_reg_timestamps or []
+    timestamps.append(now.isoformat())
+    user.face_reg_timestamps = timestamps
+    db.commit()
+    return {"message": "Face registered", "face_registered": True}
+
+
+@app.get("/auth/face-profile")
+def get_face_profile(
+    user: User = Depends(get_current_user),
+):
+    """Return saved face embedding for syncing to device."""
+    if not user.face_embedding:
+        raise HTTPException(status_code=404, detail="No face profile registered")
+    return {"embedding": user.face_embedding, "face_registered": True}
+
+
+@app.post("/auth/re-register-face")
+def re_register_face(
+    payload: dict,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Re-register face with server-side rate limiting (2/month)."""
+    embedding = payload.get("embedding")
+    if not embedding or not isinstance(embedding, list):
+        raise HTTPException(status_code=422, detail="embedding must be a list of floats")
+
+    now = _now_ist()
+    timestamps = user.face_reg_timestamps or []
+    # Count registrations this calendar month
+    this_month = [
+        ts for ts in timestamps
+        if ts and datetime.fromisoformat(ts).year == now.year
+        and datetime.fromisoformat(ts).month == now.month
+    ]
+    if len(this_month) >= MAX_FACE_REGISTRATIONS_PER_MONTH:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Re-registration limit reached ({MAX_FACE_REGISTRATIONS_PER_MONTH}/month). Contact your teacher.",
+        )
+
+    user.face_embedding = embedding
+    timestamps.append(now.isoformat())
+    user.face_reg_timestamps = timestamps
+    db.commit()
+    return {"message": "Face re-registered", "face_registered": True}
 
 
 # ── BLE Sessions ──────────────────────────────────────────────────────────────
