@@ -6,6 +6,7 @@ on:
       - main 
       - Kushagra
       - MOKSH # change to your default branch if different
+      - face-unlock  # temporary: revert this line after merging
   workflow_dispatch:  # lets you trigger manually from the Actions tab
 
 # Prevent concurrent builds on the same branch (e.g. rapid pushes)
@@ -76,10 +77,14 @@ jobs:
         run: flutter pub get
 
       # ── Build ──────────────────────────────────────────────────────────────
-      # Produces: mobile/ble_attendance_mobile/build/app/outputs/flutter-apk/app-release.apk
-      - name: Build release APK
+      # --split-per-abi produces one APK per ABI instead of a fat APK.
+      # arm64-v8a  → modern 64-bit phones (almost everything since 2017)
+      # armeabi-v7a → older/budget 32-bit phones
+      - name: Build release APKs (split per ABI)
         working-directory: mobile/ble_attendance_mobile
-        run: flutter build apk --release --target-platform android-arm64
+        run: |
+          flutter build apk --release --split-per-abi \
+            --target-platform android-arm64,android-arm
 
       # ── Version tag ───────────────────────────────────────────────────────
       # Reads the version from pubspec.yaml, e.g. "1.2.0+3"
@@ -93,14 +98,16 @@ jobs:
           echo "tag=v${BUILD}-${SHORT_SHA}" >> $GITHUB_OUTPUT
           echo "name=BLE Attendance ${BUILD} (${SHORT_SHA})" >> $GITHUB_OUTPUT
 
-      # ── Rename APK ────────────────────────────────────────────────────────
-      - name: Rename APK
+      # ── Rename APKs ───────────────────────────────────────────────────────
+      - name: Rename APKs
         run: |
-          mv mobile/ble_attendance_mobile/build/app/outputs/flutter-apk/app-release.apk \
-             ble_attendance-${{ steps.version.outputs.tag }}.apk
+          mv mobile/ble_attendance_mobile/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
+             ble_attendance-arm64-${{ steps.version.outputs.tag }}.apk
+          mv mobile/ble_attendance_mobile/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk \
+             ble_attendance-arm32-${{ steps.version.outputs.tag }}.apk
 
       # ── Create GitHub Release ─────────────────────────────────────────────
-      - name: Create Release and upload APK
+      - name: Create Release and upload APKs
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
@@ -111,7 +118,14 @@ jobs:
             **Triggered by:** ${{ github.actor }}
 
             Auto-generated release from CI.
-          files: ble_attendance-${{ steps.version.outputs.tag }}.apk
+
+            | File | Architecture |
+            |------|-------------|
+            | `ble_attendance-arm64-*.apk` | arm64-v8a — modern phones (recommended) |
+            | `ble_attendance-arm32-*.apk` | armeabi-v7a — older/32-bit phones |
+          files: |
+            ble_attendance-arm64-${{ steps.version.outputs.tag }}.apk
+            ble_attendance-arm32-${{ steps.version.outputs.tag }}.apk
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
