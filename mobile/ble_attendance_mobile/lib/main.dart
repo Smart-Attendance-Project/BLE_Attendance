@@ -572,7 +572,50 @@ class _TeacherPageState extends State<TeacherPage> {
   }
 
 
-  Future<void> _endSession() async {
+  Future<void> _endSession({bool force = false}) async {
+    if (!_finalizationOpen && !force) {
+      if (mounted) {
+        final result = await showDialog<String>(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            title: const Text(
+              'Finalization Pending',
+              style: TextStyle(fontWeight: FontWeight.w700, color: Colors.red),
+            ),
+            content: const Text(
+              'Attendance finalization has not been opened for this session. '
+              'Ending the session now without finalization will prevent students from verifying their biometrics, '
+              'which may result in all students being marked as absent.\n\n'
+              'Please choose an option to proceed:',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, 'cancel'),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, 'finalize'),
+                child: const Text('Go for Finalization'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                onPressed: () => Navigator.pop(ctx, 'anyway'),
+                child: const Text('End Session Anyway'),
+              ),
+            ],
+          ),
+        );
+
+        if (result == 'finalize') {
+          _openFinalization();
+          return;
+        } else if (result != 'anyway') {
+          return;
+        }
+      }
+    }
+
     var sessionId = _sessionId;
     if (sessionId == null) {
       try {
@@ -981,7 +1024,7 @@ class _TeacherPageState extends State<TeacherPage> {
                   padding: const EdgeInsets.only(top: 8),
                   child: FilledButton.icon(
                     style: FilledButton.styleFrom(backgroundColor: Colors.red),
-                    onPressed: _loading ? null : _endSession,
+                    onPressed: _loading ? null : () => _endSession(),
                     icon: const Icon(Icons.check_rounded),
                     label: const Text('Confirm End + Submit Attendance'),
                   ),
@@ -2063,6 +2106,12 @@ class ApiClient {
 // ===========================================================================
 
 Future<bool> _ensureBlePermissions() async {
+  if (Platform.isAndroid) {
+    await Permission.notification.request();
+    if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
+      await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+    }
+  }
   final bleStatuses = await [
     Permission.bluetoothScan,
     Permission.bluetoothConnect,
@@ -2078,6 +2127,12 @@ Future<bool> _ensureBlePermissions() async {
 }
 
 Future<bool> _ensureBleAdvertisePermissions() async {
+  if (Platform.isAndroid) {
+    await Permission.notification.request();
+    if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
+      await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+    }
+  }
   final bleStatuses = await [
     Permission.bluetoothAdvertise,
     Permission.bluetoothConnect,
@@ -2090,6 +2145,12 @@ Future<bool> _ensureBleAdvertisePermissions() async {
 }
 
 Future<bool> _ensureBleScanPermissions() async {
+  if (Platform.isAndroid) {
+    await Permission.notification.request();
+    if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
+      await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+    }
+  }
   final bleStatuses = await [
     Permission.bluetoothScan,
     Permission.bluetoothConnect,
@@ -2121,8 +2182,8 @@ void _initForegroundTask() {
       channelId: 'ble_attendance_fg',
       channelName: 'BLE Attendance',
       channelDescription: 'Keeps BLE scanning/advertising alive',
-      channelImportance: NotificationChannelImportance.LOW,
-      priority: NotificationPriority.LOW,
+      channelImportance: NotificationChannelImportance.HIGH,
+      priority: NotificationPriority.HIGH,
     ),
     iosNotificationOptions: const IOSNotificationOptions(
       showNotification: false,
@@ -2133,7 +2194,7 @@ void _initForegroundTask() {
       autoRunOnBoot: false,
       autoRunOnMyPackageReplaced: false,
       allowWakeLock: true,
-      allowWifiLock: false,
+      allowWifiLock: true,
     ),
   );
 }
