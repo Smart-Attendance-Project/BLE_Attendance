@@ -26,6 +26,7 @@ class TokenResponse(BaseModel):
     role: UserRole
     full_name: str
     user_id: str
+    division_ids: list[int] = []
 
 
 class UserOut(BaseModel):

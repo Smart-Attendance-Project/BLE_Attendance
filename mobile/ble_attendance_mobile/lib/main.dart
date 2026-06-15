@@ -176,14 +176,23 @@ class _LoginPageState extends State<LoginPage> {
           role: _role,
         );
       }
-      final token = await _api.login(
+      final loginData = await _api.login(
         identifier: _identifierCtrl.text.trim().toUpperCase(),
         password: _passwordCtrl.text,
       );
+      final token = loginData['access_token'] as String;
       await _api.saveToken(token);
       await _api.saveRole(_role.name);
       // Save identifier for BLE advertising (student) or display (teacher)
       await _api.saveIdentifier(_identifierCtrl.text.trim().toUpperCase());
+
+      // Save student's division IDs if they are a student
+      if (_role == AppRole.student) {
+        final divIds = loginData['division_ids'] as List<dynamic>? ?? [];
+        final divIdsStr = divIds.map((e) => e.toString()).join(',');
+        const storage = FlutterSecureStorage();
+        await storage.write(key: 'student_division_ids', value: divIdsStr);
+      }
       if (!mounted) return;
       if (_role == AppRole.teacher) {
         Navigator.of(context).pushReplacement(
@@ -349,6 +358,7 @@ class _TeacherPageState extends State<TeacherPage> {
   final FlutterReactiveBle _ble = FlutterReactiveBle();
 
   String? _sessionId;
+  int? _activeDivisionId;
   String? _token;
   bool _loading = false;
   bool _isAdvertising = false;
@@ -428,9 +438,11 @@ class _TeacherPageState extends State<TeacherPage> {
 
       final subjectName = _selectedSlot!['subject_name'] as String;
       final assignmentId = _selectedSlot!['assignment_id'] as int;
+      final divisionId = _selectedSlot!['division_id'] as int;
 
       final session = await widget.api.startSession(subjectName, assignmentId: assignmentId);
       _sessionId = session['id'] as String;
+      _activeDivisionId = divisionId;
       _token = session['token'] as String;
       _finalizationOpen = (session['finalization_open'] as bool?) ?? false;
 
@@ -471,9 +483,10 @@ class _TeacherPageState extends State<TeacherPage> {
   }
 
   Future<void> _updateTeacherAdvertisingPayload(String subjectName) async {
-    if (_token == null) return;
+    if (_activeDivisionId == null) return;
     try {
-      final payloadBytes = _encodeTeacherPayload(_token!, subjectName, _globalTotalHits);
+      final encryptedDiv = encryptDivisionId(_activeDivisionId!);
+      final payloadBytes = _encodeTeacherPayload(encryptedDiv, subjectName, _globalTotalHits);
       final data = AdvertiseData(
         serviceUuid: kTeacherServiceUuid,
         includeDeviceName: false,
@@ -1096,9 +1109,9 @@ class _StudentPageState extends State<StudentPage> {
   StreamSubscription<BleStatus>? _bleStatusSub;
 
   String? _sessionId;
-  String? _sessionToken;
   String? _subject;
   String? _teacherName;
+  List<int> _studentDivisionIds = [];
   String? _studentIdentifier;
   int? _latestRssi;
   bool _scanning = false;
@@ -1187,7 +1200,17 @@ class _StudentPageState extends State<StudentPage> {
     });
   }
 
+  Future<void> _loadStudentDivisionIds() async {
+    const storage = FlutterSecureStorage();
+    final idsStr = await storage.read(key: 'student_division_ids');
+    if (idsStr != null && idsStr.isNotEmpty) {
+      _studentDivisionIds = idsStr.split(',').map((e) => int.tryParse(e)).whereType<int>().toList();
+    }
+  }
+
   Future<void> _bootstrap() async {
+    // Load student division IDs
+    await _loadStudentDivisionIds();
     // Load saved student identifier
     _studentIdentifier = await widget.api.readIdentifier();
 
@@ -1224,7 +1247,6 @@ class _StudentPageState extends State<StudentPage> {
       final wasOpen = _finalizationOpen;
       final isOpen = (session['finalization_open'] as bool?) ?? false;
       final newId = session['id'] as String;
-      final newToken = session['token'] as String?;
 
       // If the session changed (teacher ended and started a new one),
       // reset local hit counters so stale data doesn't carry over.
@@ -1241,7 +1263,6 @@ class _StudentPageState extends State<StudentPage> {
 
       setState(() {
         _sessionId = newId;
-        _sessionToken = newToken;
         _subject = session['subject'] as String;
         _teacherName = session['teacher_name'] as String?;
         _finalizationOpen = isOpen;
@@ -1266,7 +1287,6 @@ class _StudentPageState extends State<StudentPage> {
           _updateStudentAdvertising();
           setState(() {
             _sessionId = null;
-            _sessionToken = null;
             _subject = null;
             _teacherName = null;
             _finalizationOpen = false;
@@ -1357,13 +1377,9 @@ class _StudentPageState extends State<StudentPage> {
             final payload = _decodeTeacherPayload(device);
             if (payload != null) {
               final token = (payload['token'] as String?)?.toLowerCase();
-              if (_sessionToken == null || token == null) {
-                return; // Ignore if we don't have the active session token yet
-              }
-              final expectedTokenPart = (_sessionToken!.length > 10
-                  ? _sessionToken!.substring(0, 10)
-                  : _sessionToken!).toLowerCase();
-              if (token != expectedTokenPart) {
+              if (token == null) return;
+              final divId = decryptDivisionId(token);
+              if (divId == -1 || !_studentDivisionIds.contains(divId)) {
                 return; // Ignore neighbor teacher's beacon
               }
 
@@ -2018,7 +2034,7 @@ class ApiClient {
     );
   }
 
-  Future<String> login({
+  Future<Map<String, dynamic>> login({
     required String identifier,
     required String password,
   }) async {
@@ -2026,8 +2042,7 @@ class ApiClient {
       '/auth/login',
       data: {'identifier': identifier, 'password': password},
     );
-    final json = Map<String, dynamic>.from(response.data as Map);
-    return json['access_token'] as String;
+    return Map<String, dynamic>.from(response.data as Map);
   }
 
   // Sessions
@@ -2252,4 +2267,18 @@ String _normalizeBaseUrl(String input) {
   return withScheme.endsWith('/')
       ? withScheme.substring(0, withScheme.length - 1)
       : withScheme;
+}
+
+String encryptDivisionId(int divisionId) {
+  final encryptedInt = divisionId ^ 0x5A3C;
+  return encryptedInt.toRadixString(16);
+}
+
+int decryptDivisionId(String encryptedHex) {
+  try {
+    final encryptedInt = int.parse(encryptedHex, radix: 16);
+    return encryptedInt ^ 0x5A3C;
+  } catch (_) {
+    return -1;
+  }
 }

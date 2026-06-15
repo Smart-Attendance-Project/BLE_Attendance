@@ -130,8 +130,19 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     if user is None:
         raise HTTPException(status_code=401, detail="Invalid credentials")
     token = create_access_token(subject=user.id)
+    # For students, include their enrolled division IDs so the mobile app
+    # can filter BLE beacons locally without further server calls.
+    div_ids: list[int] = []
+    if user.role == UserRole.student:
+        div_ids = [
+            row for row in db.execute(
+                select(DivisionStudent.division_id)
+                .where(DivisionStudent.student_user_id == user.id)
+            ).scalars().all()
+        ]
     return TokenResponse(access_token=token, role=user.role,
-                         full_name=user.full_name, user_id=user.id)
+                         full_name=user.full_name, user_id=user.id,
+                         division_ids=div_ids)
 
 
 @app.get("/auth/me", response_model=UserOut)
@@ -953,6 +964,7 @@ def teacher_today_slots_mobile(db: Session = Depends(get_db),
             "assignment_id": slot.assignment_id,
             "subject_name": a.subject.name if a.subject else "",
             "subject_code": a.subject.code if a.subject else "",
+            "division_id": a.division_id,
             "division_label": a.division.label if a.division else "",
             "batch_label": a.batch.label if a.batch else None,
             "time_start": slot.time_start,
