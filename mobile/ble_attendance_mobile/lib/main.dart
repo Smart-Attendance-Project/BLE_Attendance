@@ -503,7 +503,7 @@ class _TeacherPageState extends State<TeacherPage> {
     _scanCycleTimer?.cancel();
     _isScanning = true;
     _scanSub = _ble.scanForDevices(
-      withServices: const [],
+      withServices: [Uuid.parse(kStudentServiceUuid)],
       scanMode: ScanMode.lowLatency,
       requireLocationServicesEnabled: false,
     ).listen(
@@ -1387,7 +1387,7 @@ class _StudentPageState extends State<StudentPage> {
 
     _scanSub = _ble
         .scanForDevices(
-          withServices: const [],
+          withServices: [Uuid.parse(kTeacherServiceUuid)],
           scanMode: ScanMode.lowLatency,
           requireLocationServicesEnabled: false,
         )

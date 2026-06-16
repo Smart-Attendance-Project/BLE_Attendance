@@ -221,8 +221,8 @@ def re_register_face(
             raise HTTPException(status_code=422, detail="Invalid embedding dimensions")
         
         dist = math.sqrt(sum((a - b) ** 2 for a, b in zip(existing, embedding)))
-        # 1.1 matches defaultThreshold in face_recognizer.dart
-        if dist >= 1.1:
+        # 0.85 matches defaultThreshold in face_recognizer.dart
+        if dist >= 0.85:
             raise HTTPException(
                 status_code=400,
                 detail="Face does not match your registered profile. Re-registration rejected."
