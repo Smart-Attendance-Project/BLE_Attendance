@@ -363,9 +363,9 @@ class _TeacherPageState extends State<TeacherPage> {
   bool _loading = false;
   bool _isAdvertising = false;
   bool _finalizationOpen = false;
-  bool _showEndConfirm = false;
   bool _isScanning = false;
-  bool _hitsPaused = false;
+  String? _activeSubjectName;
+
   Map<String, dynamic>? _summary;
   Map<String, String> _studentNames = {};
   Map<String, bool> _verifiedStudents = {};
@@ -447,7 +447,7 @@ class _TeacherPageState extends State<TeacherPage> {
       _finalizationOpen = (session['finalization_open'] as bool?) ?? false;
 
       _globalTotalHits = 0;
-      _hitsPaused = true;
+      _activeSubjectName = subjectName;
       _studentTallies.clear();
       _verifiedStudents.clear();
       _studentNames = {};
@@ -470,14 +470,15 @@ class _TeacherPageState extends State<TeacherPage> {
     await _updateTeacherAdvertisingPayload(subjectName);
 
     _teacherAdvertiseTimer = Timer.periodic(const Duration(seconds: 4), (_) async {
-      if (!mounted || !_isAdvertising || _sessionId == null || _finalizationOpen) {
+      if (!mounted || !_isAdvertising || _sessionId == null) {
         _teacherAdvertiseTimer?.cancel();
         return;
       }
-      if (_hitsPaused) return; // Skip hit increment when paused
-      setState(() {
-        _globalTotalHits++;
-      });
+      if (!_finalizationOpen) {
+        setState(() {
+          _globalTotalHits++;
+        });
+      }
       await _updateTeacherAdvertisingPayload(subjectName);
     });
   }
@@ -485,7 +486,7 @@ class _TeacherPageState extends State<TeacherPage> {
   Future<void> _updateTeacherAdvertisingPayload(String subjectName) async {
     if (_activeDivisionId == null) return;
     try {
-      final payloadBytes = _encodeTeacherPayload(_activeDivisionId!, subjectName, _globalTotalHits);
+      final payloadBytes = _encodeTeacherPayload(_activeDivisionId!, subjectName, _globalTotalHits, _finalizationOpen);
       final data = AdvertiseData(
         serviceUuid: kTeacherServiceUuid,
         includeDeviceName: false,
@@ -552,11 +553,18 @@ class _TeacherPageState extends State<TeacherPage> {
 
   Map<String, dynamic>? _extractStudentPayload(DiscoveredDevice device) {
     if (device.manufacturerData.isEmpty) return null;
+    // Ignore teacher beacons (they use a different service UUID)
+    if (device.serviceUuids.isNotEmpty && device.serviceUuids.contains(Uuid.parse(kTeacherServiceUuid))) {
+      return null;
+    }
     try {
       final bytes = device.manufacturerData;
       if (bytes.length < 4) return null;
-      final payload = utf8.decode(bytes.sublist(2), allowMalformed: true).trim();
+      // Strict decode — reject garbled BLE noise
+      final payload = utf8.decode(bytes.sublist(2)).trim();
       if (!payload.contains('|')) return null;
+      // Reject teacher payloads that leak through
+      if (payload.startsWith('T|')) return null;
       final parts = payload.split('|');
       final studentId = parts[0];
       final hits = parts.length > 1 ? int.tryParse(parts[1]) : null;
@@ -577,54 +585,102 @@ class _TeacherPageState extends State<TeacherPage> {
     return null;
   }
 
-  List<int> _encodeTeacherPayload(int divisionId, String subject, int seq) {
+  List<int> _encodeTeacherPayload(int divisionId, String subject, int seq, bool finalizationOpen) {
     final subjectPart = subject.length > 10 ? subject.substring(0, 10) : subject;
-    return utf8.encode('T|$divisionId|$subjectPart|$seq');
+    final fFlag = finalizationOpen ? '|F' : '';
+    return utf8.encode('T|$divisionId|$subjectPart|$seq$fFlag');
   }
 
 
-  Future<void> _endSession({bool force = false}) async {
-    if (!_finalizationOpen && !force) {
-      if (mounted) {
-        final result = await showDialog<String>(
-          context: context,
-          barrierDismissible: false,
-          builder: (ctx) => AlertDialog(
-            title: const Text(
-              'Finalization Pending',
-              style: TextStyle(fontWeight: FontWeight.w700, color: Colors.red),
-            ),
-            content: const Text(
-              'Attendance finalization has not been opened for this session. '
-              'Ending the session now without finalization will prevent students from verifying their biometrics, '
-              'which may result in all students being marked as absent.\n\n'
-              'Please choose an option to proceed:',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, 'cancel'),
-                child: const Text('Cancel'),
+  Future<void> _endSession() async {
+    if (!mounted) return;
+
+    // Find students who are present (>= 75% hits) but have NOT verified biometrics
+    final unverifiedPresent = _studentTallies.values.where((t) {
+      final ratio = _globalTotalHits > 0 ? t.hits / _globalTotalHits : 0.0;
+      final isPresent = ratio >= 0.75;
+      final verified = t.biometricVerified || (_verifiedStudents[t.studentId] == true);
+      return isPresent && !verified;
+    }).toList();
+
+    if (unverifiedPresent.isNotEmpty) {
+      // Show dialog with unverified student list
+      final result = await showDialog<String>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text(
+            'Students Not Verified',
+            style: TextStyle(fontWeight: FontWeight.w700, color: Colors.orange),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${unverifiedPresent.length} student(s) are present but have not completed face verification:',
+                style: const TextStyle(fontSize: 14),
               ),
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, 'finalize'),
-                child: const Text('Go for Finalization'),
-              ),
-              FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: Colors.red),
-                onPressed: () => Navigator.pop(ctx, 'anyway'),
-                child: const Text('End Session Anyway'),
+              const SizedBox(height: 12),
+              Container(
+                constraints: const BoxConstraints(maxHeight: 200),
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: unverifiedPresent.map((t) {
+                      final name = _studentNames[t.studentId];
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        child: Row(children: [
+                          const Icon(Icons.warning_amber_rounded, size: 16, color: Colors.orange),
+                          const SizedBox(width: 8),
+                          Text(
+                            '${t.studentId}${name != null ? ' • $name' : ''}',
+                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                          ),
+                        ]),
+                      );
+                    }).toList(),
+                  ),
+                ),
               ),
             ],
           ),
-        );
-
-        if (result == 'finalize') {
-          _openFinalization();
-          return;
-        } else if (result != 'anyway') {
-          return;
-        }
-      }
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'cancel'),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () => Navigator.pop(ctx, 'anyway'),
+              child: const Text('End Session Anyway'),
+            ),
+          ],
+        ),
+      );
+      if (result != 'anyway') return;
+    } else {
+      // All present students are verified — simple confirmation
+      final confirm = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text('End Session', style: TextStyle(fontWeight: FontWeight.w700)),
+          content: const Text('Do you want to end the session?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('End Session'),
+            ),
+          ],
+        ),
+      );
+      if (confirm != true) return;
     }
 
     var sessionId = _sessionId;
@@ -670,8 +726,7 @@ class _TeacherPageState extends State<TeacherPage> {
           _sessionId = null;
           _token = null;
           _finalizationOpen = false;
-          _showEndConfirm = false;
-          _hitsPaused = false;
+          _activeSubjectName = null;
           _studentTallies.clear();
           _verifiedStudents.clear();
         });
@@ -740,20 +795,6 @@ class _TeacherPageState extends State<TeacherPage> {
     } catch (_) {}
   }
 
-  void _toggleHits() {
-    setState(() {
-      _hitsPaused = !_hitsPaused;
-    });
-    if (_hitsPaused) {
-      // Stop advertising when hits are paused
-      _blePeripheral.stop();
-    } else {
-      // Resume advertising with current payload
-      final subjectName = _selectedSlot?['subject_name'] as String? ?? '';
-      _updateTeacherAdvertisingPayload(subjectName);
-    }
-  }
-
   Future<void> _openFinalization() async {
     final sessionId = _sessionId;
     if (sessionId == null) return;
@@ -763,11 +804,10 @@ class _TeacherPageState extends State<TeacherPage> {
       if (!mounted) return;
       setState(() {
         _finalizationOpen = (session['finalization_open'] as bool?) ?? true;
-        _hitsPaused = true; // Auto-pause hits on finalization
       });
-      _teacherAdvertiseTimer?.cancel();
-      await _blePeripheral.stop();
-      _isAdvertising = false;
+      // Keep advertising — payload now includes |F flag for students to detect finalization via BLE
+      final subjectName = _activeSubjectName ?? '';
+      await _updateTeacherAdvertisingPayload(subjectName);
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Finalization opened for students.')));
     } catch (error) {
       if (!mounted) return;
@@ -903,33 +943,32 @@ class _TeacherPageState extends State<TeacherPage> {
                   Wrap(spacing: 8, children: [
                     _StatusChip(label: _isAdvertising ? 'BLE ON' : 'BLE OFF', active: _isAdvertising),
                     _StatusChip(label: _isScanning ? 'Scan ON' : 'Scan OFF', active: _isScanning),
-                    _StatusChip(label: _hitsPaused ? 'Hits PAUSED' : 'Hits ACTIVE', active: !_hitsPaused),
-                    _StatusChip(label: _finalizationOpen ? 'Finalization OPEN' : 'Finalization CLOSED', active: _finalizationOpen),
+                    _StatusChip(label: _finalizationOpen ? 'Finalization OPEN' : 'Hits ACTIVE', active: true),
                   ]),
                   const SizedBox(height: 10),
                   Text('Total hits sent: $_globalTotalHits', style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
                 ]),
               ),
               const SizedBox(height: 10),
-              Row(children: [
-                Expanded(
+              if (!_finalizationOpen)
+                SizedBox(
+                  width: double.infinity,
                   child: FilledButton.icon(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: _hitsPaused ? Colors.green : Colors.orange,
-                    ),
-                    onPressed: _loading || _finalizationOpen ? null : _toggleHits,
-                    icon: Icon(_hitsPaused ? Icons.play_arrow_rounded : Icons.pause_rounded),
-                    label: Text(_hitsPaused ? 'Start Hits' : 'Stop Hits'),
+                    onPressed: _loading ? null : _openFinalization,
+                    icon: const Icon(Icons.how_to_reg_rounded),
+                    label: const Text('Open Finalization'),
+                  ),
+                )
+              else
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                    onPressed: _loading ? null : _endSession,
+                    icon: const Icon(Icons.stop_circle_outlined),
+                    label: const Text('End Session'),
                   ),
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: FilledButton.tonal(
-                    onPressed: _loading || _finalizationOpen ? null : _openFinalization,
-                    child: const Text('Open Finalization'),
-                  ),
-                ),
-              ]),
               const SizedBox(height: 14),
               Row(children: [
                 Text('Detected students', style: TextStyle(fontWeight: FontWeight.w700, color: cs.onSurface)),
@@ -1023,23 +1062,6 @@ class _TeacherPageState extends State<TeacherPage> {
                         },
                       ),
               ),
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(foregroundColor: Colors.red, side: const BorderSide(color: Colors.red)),
-                onPressed: _loading ? null : () => setState(() => _showEndConfirm = !_showEndConfirm),
-                icon: Icon(_showEndConfirm ? Icons.close_rounded : Icons.stop_circle_outlined),
-                label: Text(_showEndConfirm ? 'Cancel' : 'End Session'),
-              ),
-              if (_showEndConfirm)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: FilledButton.icon(
-                    style: FilledButton.styleFrom(backgroundColor: Colors.red),
-                    onPressed: _loading ? null : () => _endSession(),
-                    icon: const Icon(Icons.check_rounded),
-                    label: const Text('Confirm End + Submit Attendance'),
-                  ),
-                ),
             ],
             const SizedBox(height: 8),
           ],
@@ -1413,6 +1435,12 @@ class _StudentPageState extends State<StudentPage> {
               // Debounce proximity changes
               _updateDebouncedProximity(ok);
 
+              // Detect finalization via BLE (works even without internet)
+              final bleFinalization = payload['finalizationOpen'] as bool? ?? false;
+              if (bleFinalization && !_finalizationOpen) {
+                _finalizationOpen = true;
+              }
+
               setState(() {
                 _latestRssi = avgRssi;
                 _sessionId ??= 'ble-detected';
@@ -1485,16 +1513,19 @@ class _StudentPageState extends State<StudentPage> {
 
       final divisionId = int.tryParse(parts[1]);
       final subject = parts.length > 2 ? parts[2].trim() : null;
-      final seq = parts.length > 3 ? int.tryParse(parts[3].trim()) : null;
+      final seqStr = parts.length > 3 ? parts[3].trim() : null;
+      final seq = seqStr != null ? int.tryParse(seqStr) : null;
+      final finalizationOpen = parts.length > 4 && parts[4].trim() == 'F';
 
       if (divisionId == null) return null;
       if (subject != null && (subject.isEmpty || RegExp(r'[\x00-\x1F]').hasMatch(subject))) {
-        return {'divisionId': divisionId, 'subject': null, 'seq': seq};
+        return {'divisionId': divisionId, 'subject': null, 'seq': seq, 'finalizationOpen': finalizationOpen};
       }
       return {
         'divisionId': divisionId,
         'subject': subject,
         'seq': seq,
+        'finalizationOpen': finalizationOpen,
       };
     } catch (_) {}
     return null;
