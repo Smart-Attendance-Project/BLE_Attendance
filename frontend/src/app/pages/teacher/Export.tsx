@@ -62,7 +62,11 @@ export function Export() {
       <Panel>
         <div className="grid gap-6">
           <Field label="Class / Subject">
-            <select value={assignmentId} onChange={(e) => setAssignmentId(e.target.value)} className="h-11 w-full rounded-xl border border-border bg-white px-4 text-sm outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/15">
+            <select
+              value={assignmentId}
+              onChange={(e) => setAssignmentId(e.target.value)}
+              className="h-11 w-full rounded-lg border border-slate-200 bg-slate-50/50 px-4 text-sm text-muted-foreground outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
+            >
               <option value="">Select a class</option>
               {(assignments as any[]).map((a) => (
                 <option key={a.id} value={a.id}>
@@ -74,10 +78,15 @@ export function Export() {
           </Field>
 
           <div>
-            <label className="mb-2 block text-sm font-medium text-foreground">Quick range</label>
-            <div className="flex flex-wrap gap-2">
+            <label className="mb-2 block text-sm font-semibold text-foreground">Quick range</label>
+            <div className="flex flex-wrap gap-3">
               {PRESETS.map((p) => (
-                <button key={p.label} onClick={() => { setFromDate(p.from); setToDate(p.to); }} className="rounded-xl border border-border bg-surface-2 px-4 py-2 text-sm font-medium text-foreground transition hover:bg-white">
+                <button
+                  key={p.label}
+                  onClick={() => { setFromDate(p.from); setToDate(p.to); }}
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-foreground transition hover:bg-slate-100"
+                  type="button"
+                >
                   {p.label}
                 </button>
               ))}
@@ -85,18 +94,32 @@ export function Export() {
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="From">
-              <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="h-11 w-full rounded-xl border border-border bg-white px-4 text-sm outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/15" />
-            </Field>
-            <Field label="To">
-              <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="h-11 w-full rounded-xl border border-border bg-white px-4 text-sm outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/15" />
-            </Field>
+            <div className="bg-slate-50/50 p-4 rounded-lg border border-slate-100">
+              <Field label="From">
+                <input
+                  type="date"
+                  value={fromDate}
+                  onChange={(e) => setFromDate(e.target.value)}
+                  className="h-11 w-full rounded-lg border border-slate-200 bg-white px-4 text-sm text-foreground outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
+                />
+              </Field>
+            </div>
+            <div className="bg-slate-50/50 p-4 rounded-lg border border-slate-100">
+              <Field label="To">
+                <input
+                  type="date"
+                  value={toDate}
+                  onChange={(e) => setToDate(e.target.value)}
+                  className="h-11 w-full rounded-lg border border-slate-200 bg-white px-4 text-sm text-foreground outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
+                />
+              </Field>
+            </div>
           </div>
 
-          {err && <p className="rounded-xl bg-error/10 px-4 py-3 text-sm text-[#a85a4c]">{err}</p>}
+          {err && <p className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{err}</p>}
 
-          <Button onClick={doExport} disabled={loading} className="h-11 rounded-xl">
-            <Download className="size-4" /> {loading ? "Exporting…" : "Download Excel"}
+          <Button onClick={doExport} disabled={loading} className="h-12 w-full rounded-lg">
+            <Download className="size-5" /> {loading ? "Exporting…" : "Download Excel"}
           </Button>
         </div>
       </Panel>

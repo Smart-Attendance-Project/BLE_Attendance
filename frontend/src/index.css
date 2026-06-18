@@ -1,40 +1,41 @@
 @import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@300;400;500;600;700&display=swap');
 
 @theme inline {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-serif: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --font-sans: "Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
 
-  --color-background: #f7f6f2;
-  --color-foreground: #30322f;
-  --color-card: #fffefa;
-  --color-card-foreground: #30322f;
-  --color-popover: #fffefa;
-  --color-popover-foreground: #30322f;
-  --color-primary: #38443d;
-  --color-primary-foreground: #fbfaf6;
-  --color-secondary: #ecefe8;
-  --color-secondary-foreground: #30322f;
-  --color-muted: #ecefe8;
-  --color-muted-foreground: #74796f;
-  --color-accent: #eef2ed;
-  --color-accent-foreground: #30322f;
-  --color-destructive: #c97268;
+  --color-background: #f0f4f8;
+  --color-foreground: #1e293b;
+  --color-card: #ffffff;
+  --color-card-foreground: #1e293b;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #1e293b;
+  --color-primary: #0d9488;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #f1f5f9;
+  --color-secondary-foreground: #334155;
+  --color-muted: #f1f5f9;
+  --color-muted-foreground: #64748b;
+  --color-accent: #f0fdfa;
+  --color-accent-foreground: #0d9488;
+  --color-destructive: #ef4444;
   --color-destructive-foreground: #ffffff;
-  --color-border: #deded6;
-  --color-input: #d9d9d1;
-  --color-ring: #9eb6ad;
+  --color-border: #e2e8f0;
+  --color-input: #cbd5e1;
+  --color-ring: #0d9488;
   --radius: 0.5rem;
 
-  --color-surface-2: #eef0ea;
-  --color-primary-soft: #dbe5df;
-  --color-mint: #c8ded4;
-  --color-blush: #efd8d6;
-  --color-butter: #f0e4bc;
-  --color-success: #94bea6;
-  --color-warning: #d6b76f;
-  --color-error: #c97268;
-  --color-pop: #c98278;
-  --color-pop-soft: #f0dedb;
+  --color-surface-2: #f1f5f9;
+  --color-primary-soft: rgba(13, 148, 136, 0.1);
+  --color-mint: #ccfbf1;
+  --color-blush: #fee2e2;
+  --color-butter: #fef3c7;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+  --color-pop: #0d9488;
+  --color-pop-soft: #ccfbf1;
 }
 
 @keyframes page-in {
@@ -91,7 +92,8 @@
 
   h1,
   h2 {
-    font-family: var(--font-serif);
-    letter-spacing: 0;
+    font-family: var(--font-sans);
+    letter-spacing: -0.01em;
+    font-weight: 700;
   }
 }

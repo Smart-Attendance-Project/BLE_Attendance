@@ -32,26 +32,26 @@ export function Login() {
   }
 
   return (
-    <div className="min-h-screen bg-[linear-gradient(180deg,#f8f7f3,#f4f5f0)] px-5 py-8">
+    <div className="min-h-screen bg-[#f0f4f8] px-5 py-8">
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-6xl flex-col justify-center">
         <div className="flex items-center justify-center">
-          <div className="w-full max-w-md">
-            <Panel className="animate-rise-in border-border bg-card/95 p-0 shadow-[0_24px_64px_-38px_rgba(42,41,37,0.28)]">
-              <div className="border-b border-border px-7 py-6">
-                <h2 className="text-2xl text-foreground">Sign in</h2>
+          <div className="w-full max-w-[440px]">
+            <Panel className="animate-rise-in border-slate-200 bg-white p-0 shadow-[0_4px_6px_-1px_rgba(0,0,0,0.1),0_2px_4px_-1px_rgba(0,0,0,0.06)]">
+              <div className="px-8 pt-8 pb-0 md:px-12 md:pt-12">
+                <h2 className="text-2xl font-bold text-foreground">Sign in</h2>
                 <p className="mt-1 text-sm text-muted-foreground">Use your campus ID and password.</p>
               </div>
 
-              <form onSubmit={submit} className="space-y-5 px-7 py-6">
-                <div className="inline-flex w-full rounded-lg bg-surface-2 p-1">
+              <form onSubmit={submit} className="space-y-5 px-8 py-6 md:px-12 md:pb-12">
+                <div className="inline-flex w-full rounded-lg bg-slate-100 p-1">
                   {(["teacher", "admin"] as Role[]).map((r) => (
                     <button
                       key={r}
                       type="button"
                       onClick={() => setRole(r)}
                       className={cn(
-                        "flex-1 rounded-md px-3 py-2 text-sm capitalize transition-all",
-                        role === r ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                        "flex-1 rounded-lg px-3 py-1.5 text-xs font-semibold capitalize transition-all",
+                        role === r ? "bg-white text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
                       )}
                     >
                       {r}
@@ -65,7 +65,7 @@ export function Login() {
                     onChange={(e) => setId(e.target.value)}
                     placeholder={role === "admin" ? "ADM-0001" : "FAC-1042"}
                     autoComplete="username"
-                    className="h-11 w-full rounded-lg border border-border bg-card px-4 text-sm outline-none transition focus:border-ring focus:ring-4 focus:ring-ring/15"
+                    className="h-11 w-full rounded-lg border border-slate-300 bg-white px-4 text-sm text-foreground outline-none transition placeholder:text-slate-400 focus:border-primary focus:ring-1 focus:ring-primary"
                   />
                 </Field>
 
@@ -76,18 +76,18 @@ export function Login() {
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
                     autoComplete="current-password"
-                    className="h-11 w-full rounded-lg border border-border bg-card px-4 text-sm outline-none transition focus:border-ring focus:ring-4 focus:ring-ring/15"
+                    className="h-11 w-full rounded-lg border border-slate-300 bg-white px-4 text-sm text-foreground outline-none transition placeholder:text-slate-400 focus:border-primary focus:ring-1 focus:ring-primary"
                   />
                 </Field>
 
                 {error && (
-                  <div className="flex items-start gap-2 rounded-lg bg-error/10 px-3 py-2.5 text-sm text-[#a85a4c] ring-1 ring-inset ring-error/20">
+                  <div className="flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2.5 text-sm text-red-700 ring-1 ring-inset ring-red-200">
                     <AlertCircle className="mt-0.5 size-4 shrink-0" />
                     {error}
                   </div>
                 )}
 
-                <Button type="submit" disabled={loading} className="h-11 w-full">
+                <Button type="submit" disabled={loading} className="h-11 w-full rounded-lg shadow-md">
                   {loading ? (
                     <>
                       <Loader2 className="size-4 animate-spin" /> Signing in…
@@ -96,6 +96,12 @@ export function Login() {
                     "Sign in"
                   )}
                 </Button>
+
+                <div className="text-center">
+                  <a href="#" className="text-xs text-muted-foreground hover:text-primary transition-colors">
+                    Forgot password?
+                  </a>
+                </div>
               </form>
             </Panel>
           </div>

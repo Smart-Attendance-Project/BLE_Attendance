@@ -40,7 +40,7 @@ const adminNav: NavItem[] = [
 function Brand() {
   return (
     <div className="flex items-center">
-      <span className="font-serif text-[1.08rem] text-foreground">Attendance</span>
+      <span className="text-xl font-bold tracking-tight text-foreground">Attendance</span>
     </div>
   );
 }
@@ -77,11 +77,11 @@ export function Shell({
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-30 border-b border-border bg-[color-mix(in_srgb,var(--card)_88%,transparent)] backdrop-blur">
-        <div className="mx-auto flex h-16 max-w-[1240px] items-center gap-6 px-5 sm:px-8">
+      <header className="sticky top-0 z-30 border-b border-border bg-white/80 backdrop-blur-md">
+        <div className="mx-auto flex h-16 max-w-7xl items-center gap-8 px-4 sm:px-6 lg:px-8">
           <Brand />
 
-          <nav className="hidden flex-1 items-center gap-1 md:flex">
+          <nav className="hidden flex-1 items-center gap-6 md:flex">
             {nav.map((item) => {
               const active = current === item.key;
               return (
@@ -89,22 +89,25 @@ export function Shell({
                   key={item.key}
                   onClick={() => onNavigate(item.key)}
                   className={cn(
-                    "relative rounded-md px-3 py-1.5 text-sm transition-colors",
-                    active ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+                    "relative pb-5 mt-5 text-sm font-medium transition-colors",
+                    active
+                      ? "text-foreground border-b-2 border-primary"
+                      : "text-muted-foreground hover:text-primary"
                   )}
                 >
                   {item.label}
-                  {active && <span className="absolute inset-x-3 -bottom-[21px] h-0.5 rounded-full bg-pop" />}
                 </button>
               );
             })}
           </nav>
 
-          <div className="ml-auto flex items-center gap-3">
+          <div className="ml-auto flex items-center gap-4">
             <span
               className={cn(
-                "hidden items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs ring-1 ring-inset sm:inline-flex",
-                role === "admin" ? "bg-blush/25 text-[#9c6650] ring-blush/40" : "bg-mint/30 text-[#3d6b4d] ring-mint/40"
+                "hidden items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold sm:inline-flex",
+                role === "admin"
+                  ? "bg-sky-500/10 text-sky-500 border border-sky-500/20"
+                  : "bg-sky-500/10 text-sky-500 border border-sky-500/20"
               )}
             >
               {role === "admin" ? (isSuperAdmin ? "Super Admin" : "Administrator") : "Teacher"}
@@ -112,12 +115,14 @@ export function Shell({
 
             <div className="group relative hidden md:block">
               <button className="flex items-center gap-2 rounded-md py-1 pl-1 pr-2.5 transition-colors hover:bg-surface-2">
-                <span className="grid size-8 place-items-center rounded-full bg-primary-soft text-xs text-[#51635a]">
+                <span className="grid size-8 place-items-center rounded-full bg-sky-500 text-xs font-bold text-white">
                   {initials(userName)}
                 </span>
-                <span className="max-w-[120px] truncate text-sm">{userName}</span>
+                <span className="max-w-[120px] truncate text-sm font-medium text-sky-500">
+                  {userName}
+                </span>
               </button>
-              <div className="invisible absolute right-0 top-full w-48 translate-y-1 rounded-lg border border-border bg-card p-1.5 opacity-0 shadow-[0_12px_32px_-12px_rgba(42,41,37,0.18)] transition-all group-hover:visible group-hover:translate-y-2 group-hover:opacity-100">
+              <div className="invisible absolute right-0 top-full w-48 translate-y-1 rounded-lg border border-border bg-card p-1.5 opacity-0 shadow-[0_12px_32px_-12px_rgba(0,0,0,0.15)] transition-all group-hover:visible group-hover:translate-y-2 group-hover:opacity-100">
                 <button
                   onClick={() => onNavigate("password")}
                   className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm text-muted-foreground hover:bg-surface-2 hover:text-foreground"
@@ -126,7 +131,7 @@ export function Shell({
                 </button>
                 <button
                   onClick={onLogout}
-                  className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm text-muted-foreground hover:bg-error/10 hover:text-[#a85a4c]"
+                  className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm text-muted-foreground hover:bg-error/10 hover:text-red-600"
                 >
                   <LogOut className="size-4" /> Sign out
                 </button>
@@ -157,7 +162,7 @@ export function Shell({
                     }}
                     className={cn(
                       "flex items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm",
-                      active ? "bg-primary-soft text-foreground" : "text-muted-foreground hover:bg-surface-2"
+                      active ? "bg-primary/10 text-primary font-semibold" : "text-muted-foreground hover:bg-surface-2"
                     )}
                   >
                     <Icon className="size-[18px]" /> {item.label}
@@ -176,7 +181,7 @@ export function Shell({
       </header>
 
       <main>
-        <div className="mx-auto max-w-[1240px] px-5 py-8 sm:px-8 sm:py-10">{children}</div>
+        <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-10 lg:px-8">{children}</div>
       </main>
     </div>
   );

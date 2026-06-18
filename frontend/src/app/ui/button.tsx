@@ -11,20 +11,20 @@ export function Button({
 }) {
   const variantClass =
     variant === "outline"
-      ? "border border-border bg-card text-foreground hover:bg-surface-2"
+      ? "border border-slate-200 bg-white text-foreground hover:bg-slate-50"
       : variant === "ghost"
-      ? "bg-transparent text-foreground hover:bg-surface-2"
+      ? "bg-transparent text-foreground hover:bg-slate-100"
       : variant === "destructive"
-      ? "bg-error text-white hover:opacity-95"
-      : "bg-primary text-primary-foreground hover:brightness-[0.98]";
+      ? "bg-red-500 text-white hover:bg-red-600"
+      : "bg-primary text-white hover:bg-[#0f766e] shadow-sm";
 
-  const sizeClass = size === "sm" ? "h-9 px-3 text-sm" : size === "lg" ? "h-11 px-6 text-base" : "h-10 px-4 text-sm";
+  const sizeClass = size === "sm" ? "h-9 px-4 text-xs font-bold" : size === "lg" ? "h-11 px-6 text-base" : "h-10 px-5 text-sm font-semibold";
 
   return (
     <button
       {...props}
       className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-all disabled:pointer-events-none disabled:opacity-50",
+        "inline-flex items-center justify-center gap-2 rounded-lg transition-all disabled:pointer-events-none disabled:opacity-50",
         variantClass,
         sizeClass,
         className

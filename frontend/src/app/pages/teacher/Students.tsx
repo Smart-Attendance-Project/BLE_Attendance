@@ -34,21 +34,28 @@ export function Students() {
         subtitle="Select a division, then add and review enrolled students."
       />
 
-      <div className="mb-6 flex flex-wrap items-center gap-3">
-        <select
-          value={divId}
-          onChange={(e) => {
-            setDivId(Number(e.target.value));
-            setShowForm(false);
-          }}
-          className="h-11 min-w-56 rounded-xl border border-border bg-white px-4 text-sm outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/15"
-        >
-          <option value="">Select division</option>
-          {(divisions as any[]).map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
-        </select>
+      <div className="mb-8 flex flex-wrap items-center gap-4">
+        <div className="relative w-64">
+          <select
+            value={divId}
+            onChange={(e) => {
+              setDivId(Number(e.target.value));
+              setShowForm(false);
+            }}
+            className="h-11 w-full appearance-none rounded-lg border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
+          >
+            <option value="">Select division</option>
+            {(divisions as any[]).map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
+          </select>
+          <div className="absolute inset-y-0 right-3 flex items-center pointer-events-none">
+            <svg className="h-4 w-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path d="M19 9l-7 7-7-7" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+            </svg>
+          </div>
+        </div>
 
         {divId && (
-          <Button variant="outline" onClick={() => setShowForm((v) => !v)} className="rounded-xl">
+          <Button onClick={() => setShowForm((v) => !v)} className="rounded-lg">
             <UserPlus className="size-4" /> Add student
           </Button>
         )}
@@ -58,39 +65,39 @@ export function Students() {
         <Panel className="mb-6">
           <div className="grid gap-4 md:grid-cols-[1.2fr_1.2fr_0.8fr_auto]">
             <Field label="Full name">
-              <input value={form.full_name} onChange={(e) => setForm((f) => ({ ...f, full_name: e.target.value }))} className="h-11 w-full rounded-xl border border-border bg-white px-4 text-sm outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/15" />
+              <input value={form.full_name} onChange={(e) => setForm((f) => ({ ...f, full_name: e.target.value }))} className="h-11 w-full rounded-lg border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary" />
             </Field>
             <Field label="Student ID">
-              <input value={form.student_id} onChange={(e) => setForm((f) => ({ ...f, student_id: e.target.value }))} className="h-11 w-full rounded-xl border border-border bg-white px-4 text-sm outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/15" />
+              <input value={form.student_id} onChange={(e) => setForm((f) => ({ ...f, student_id: e.target.value }))} className="h-11 w-full rounded-lg border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary" />
             </Field>
             <Field label="Batch">
-              <select value={form.batch_id} onChange={(e) => setForm((f) => ({ ...f, batch_id: e.target.value }))} className="h-11 w-full rounded-xl border border-border bg-white px-4 text-sm outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/15">
+              <select value={form.batch_id} onChange={(e) => setForm((f) => ({ ...f, batch_id: e.target.value }))} className="h-11 w-full rounded-lg border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary">
                 <option value="">No batch</option>
                 {(batches as any[]).map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
               </select>
             </Field>
             <div className="flex items-end">
-              <Button onClick={() => addMut.mutate()} disabled={!form.full_name || !form.student_id} className="h-11 rounded-xl">
+              <Button onClick={() => addMut.mutate()} disabled={!form.full_name || !form.student_id} className="h-11 rounded-lg">
                 Save
               </Button>
             </div>
           </div>
-          {err && <p className="mt-3 text-sm text-[#a85a4c]">{err}</p>}
+          {err && <p className="mt-3 text-sm text-red-600">{err}</p>}
         </Panel>
       )}
 
       {divId ? (
         <Panel className="overflow-hidden p-0">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-surface-2/70 text-left text-xs uppercase tracking-[0.08em] text-muted-foreground">
-                <tr>
-                  <th className="px-5 py-4">Student ID</th>
-                  <th className="px-5 py-4">Name</th>
-                  <th className="px-5 py-4">Batch</th>
+            <table className="w-full text-sm text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50 text-[10px] uppercase tracking-widest font-bold text-muted-foreground border-b border-slate-200">
+                  <th className="px-8 py-4 w-1/3">Student ID</th>
+                  <th className="px-8 py-4 w-1/2">Name</th>
+                  <th className="px-8 py-4 text-right">Batch</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border">
+              <tbody className="divide-y divide-slate-100">
                 {(students as any[]).length === 0 ? (
                   <tr>
                     <td colSpan={3} className="px-5 py-10">
@@ -99,11 +106,15 @@ export function Students() {
                   </tr>
                 ) : (
                   (students as any[]).map((s) => (
-                    <tr key={s.id} className="hover:bg-surface-2/40">
-                      <td className="px-5 py-4 font-mono text-muted-foreground">{s.student_id}</td>
-                      <td className="px-5 py-4">{s.full_name}</td>
-                      <td className="px-5 py-4">
-                        {s.batch_id ? <StatusChip tone="info">{(batches as any[]).find((b) => b.id === s.batch_id)?.label ?? "Batch"}</StatusChip> : <span className="text-muted-foreground">No batch</span>}
+                    <tr key={s.id} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="px-8 py-4 font-medium text-muted-foreground">{s.student_id}</td>
+                      <td className="px-8 py-4 font-medium text-foreground">{s.full_name}</td>
+                      <td className="px-8 py-4 text-right">
+                        {s.batch_id ? (
+                          <StatusChip tone="info">{(batches as any[]).find((b) => b.id === s.batch_id)?.label ?? "Batch"}</StatusChip>
+                        ) : (
+                          <span className="text-muted-foreground">No batch</span>
+                        )}
                       </td>
                     </tr>
                   ))

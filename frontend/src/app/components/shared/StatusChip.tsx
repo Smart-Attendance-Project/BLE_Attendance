@@ -16,18 +16,18 @@ type Tone =
   | "lab";
 
 const toneStyles: Record<Tone, string> = {
-  active: "bg-success/20 text-[#4f735f] ring-success/25",
-  success: "bg-success/20 text-[#4f735f] ring-success/25",
-  present: "bg-success/20 text-[#4f735f] ring-success/25",
-  locked: "bg-[#8d968d]/12 text-[#626a62] ring-[#8d968d]/22",
-  ended: "bg-[#8d968d]/12 text-[#626a62] ring-[#8d968d]/22",
-  neutral: "bg-[#8d968d]/12 text-[#626a62] ring-[#8d968d]/22",
-  editable: "bg-butter/30 text-[#876d39] ring-butter/35",
-  warning: "bg-warning/20 text-[#876d39] ring-warning/30",
-  absent: "bg-error/16 text-[#9c5f58] ring-error/25",
-  info: "bg-primary-soft text-[#51635a] ring-primary/15",
-  lecture: "bg-primary-soft text-[#51635a] ring-primary/15",
-  lab: "bg-blush/45 text-[#9c6865] ring-blush/50",
+  active: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  success: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  present: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  locked: "bg-slate-100 text-slate-600 ring-slate-200",
+  ended: "bg-slate-100 text-slate-600 ring-slate-200",
+  neutral: "bg-slate-100 text-slate-600 ring-slate-200",
+  editable: "bg-amber-50 text-amber-700 ring-amber-200",
+  warning: "bg-amber-50 text-amber-700 ring-amber-200",
+  absent: "bg-red-50 text-red-700 ring-red-200",
+  info: "bg-teal-50 text-teal-700 ring-teal-200",
+  lecture: "bg-teal-50 text-teal-700 ring-teal-200",
+  lab: "bg-teal-50 text-teal-700 ring-teal-200",
 };
 
 const labels: Partial<Record<Tone, string>> = {
@@ -49,7 +49,7 @@ export function StatusChip({
   className?: string;
 }) {
   return (
-    <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs ring-1 ring-inset", toneStyles[tone as Tone], className)}>
+    <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ring-1 ring-inset", toneStyles[tone as Tone], className)}>
       {dot && <span className="size-1.5 rounded-full bg-current opacity-80" />}
       {children ?? labels[tone as Tone] ?? tone}
     </span>
