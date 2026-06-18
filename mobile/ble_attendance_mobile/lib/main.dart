@@ -203,14 +203,14 @@ class _LoginPageState extends State<LoginPage> {
         bool faceRegistered = false;
         try {
           final faceProfile = await _api.getFaceProfile();
+          const storage = FlutterSecureStorage();
           if (faceProfile != null && faceProfile['embedding'] != null) {
-            const storage = FlutterSecureStorage();
-            final localFace = await storage.read(key: 'face_registered');
-            if (localFace != 'true') {
-              await storage.write(key: 'face_embedding', value: jsonEncode(faceProfile['embedding']));
-              await storage.write(key: 'face_registered', value: 'true');
-            }
+            await storage.write(key: 'face_embedding', value: jsonEncode(faceProfile['embedding']));
+            await storage.write(key: 'face_registered', value: 'true');
             faceRegistered = true;
+          } else {
+            await storage.delete(key: 'face_embedding');
+            await storage.write(key: 'face_registered', value: 'false');
           }
         } catch (_) {
           // Non-critical — face sync failure shouldn't block login
@@ -1559,7 +1559,7 @@ class _StudentPageState extends State<StudentPage> {
       ),
     );
     if (confirmed == true) {
-      await _reRegisterFace();
+      await _registerFace();
     }
   }
 
@@ -1569,6 +1569,33 @@ class _StudentPageState extends State<StudentPage> {
     if (mounted) {
       setState(() => _faceRegistered = registered == 'true');
     }
+  }
+
+  Future<bool> _registerFace() async {
+    // Request camera permission
+    final camStatus = await Permission.camera.request();
+    if (!camStatus.isGranted) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Camera permission is required for face verification.')),
+      );
+      return false;
+    }
+
+    if (!mounted) return false;
+    final registered = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => FaceRegistrationPage(
+        onUpload: (embedding) async {
+          await widget.api.registerFace(embedding);
+          return true;
+        },
+      )),
+    );
+    if (registered == true && mounted) {
+      setState(() => _faceRegistered = true);
+      return true;
+    }
+    return false;
   }
 
   Future<void> _finalizeWithBiometric() async {
@@ -1581,26 +1608,9 @@ class _StudentPageState extends State<StudentPage> {
       return;
     }
 
-    // Request camera permission
-    final camStatus = await Permission.camera.request();
-    if (!camStatus.isGranted) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Camera permission is required for face verification.')),
-      );
-      return;
-    }
-
     if (!_faceRegistered) {
-      // Navigate to face registration first
-      if (!mounted) return;
-      final registered = await Navigator.of(context).push<bool>(
-        MaterialPageRoute(builder: (_) => const FaceRegistrationPage()),
-      );
-      if (registered == true) {
-        setState(() => _faceRegistered = true);
-        // After registration, immediately proceed to verification
-      } else {
+      final registered = await _registerFace();
+      if (!registered) {
         return; // User cancelled registration
       }
     }
@@ -1649,7 +1659,12 @@ class _StudentPageState extends State<StudentPage> {
 
     if (!mounted) return;
     final registered = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => const FaceRegistrationPage()),
+      MaterialPageRoute(builder: (_) => FaceRegistrationPage(
+        onUpload: (embedding) async {
+          await widget.api.reRegisterFace(embedding);
+          return true;
+        },
+      )),
     );
     if (registered == true && mounted) {
       setState(() => _faceRegistered = true);
@@ -2284,4 +2299,3 @@ String _normalizeBaseUrl(String input) {
       ? withScheme.substring(0, withScheme.length - 1)
       : withScheme;
 }
-

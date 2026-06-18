@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:camera/camera.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
@@ -9,13 +10,18 @@ import 'package:image/image.dart' as img;
 
 import 'ml/face_recognizer.dart';
 
+/// Callback signature for uploading the embedding to the server.
+/// Returns `true` if the server accepted it, `false` or throws on failure.
+typedef EmbeddingUploader = Future<bool> Function(List<double> embedding);
+
 /// Full-screen page for registering a student's face.
 ///
 /// Opens the front camera, shows an oval guide, and once a single face is
-/// detected and captured, generates the embedding and saves it locally.
+/// detected and captured, generates the embedding, uploads it, and saves it locally.
 class FaceRegistrationPage extends StatefulWidget {
-  const FaceRegistrationPage({super.key});
+  const FaceRegistrationPage({super.key, required this.onUpload});
 
+  final EmbeddingUploader onUpload;
 
   @override
   State<FaceRegistrationPage> createState() => _FaceRegistrationPageState();
@@ -91,7 +97,11 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   }
 
   Future<void> _capture() async {
-    if (_processing || _cameraController == null || !_cameraController!.value.isInitialized) return;
+    if (_processing ||
+        _cameraController == null ||
+        !_cameraController!.value.isInitialized) {
+      return;
+    }
     setState(() {
       _processing = true;
       _statusText = 'Detecting face…';
@@ -166,7 +176,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
             context: context,
             barrierDismissible: false,
             builder: (ctx) => AlertDialog(
-              title: const Text('Low Light Warning', style: TextStyle(fontWeight: FontWeight.bold)),
+              title: const Text(
+                'Low Light Warning',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
               content: const Text(
                 'IF You are registering in low light. You may face issues during attendance verification. so keep your face in light',
               ),
@@ -184,16 +197,36 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       // Generate embedding (includes preprocessing)
       final embedding = _recognizer.getEmbedding(cropped);
 
+      // Upload to server first. Registration/re-registration is intentionally
+      // online so the DB remains the source of truth for future logins.
+      setState(() => _statusText = 'Uploading to server…');
+      try {
+        final ok = await widget.onUpload(embedding);
+        if (!ok) {
+          setState(() {
+            _statusText = 'Server rejected the registration. Try again.';
+            _processing = false;
+          });
+          return;
+        }
+      } catch (e) {
+        setState(() {
+          _statusText = 'Upload failed: ${_shortError(e)}';
+          _processing = false;
+        });
+        return;
+      }
+
       setState(() => _statusText = 'Saving face profile…');
 
-      // Save locally
+      // Save locally only after server confirms.
       final embStr = await _storage.read(key: 'face_embedding');
       List<List<double>> embeddingsList = [];
       if (embStr != null) {
         final decoded = jsonDecode(embStr);
         if (decoded is List) {
           if (decoded.isNotEmpty && decoded[0] is List) {
-            embeddingsList = (decoded as List)
+            embeddingsList = decoded
                 .map((item) => List<double>.from(item as List))
                 .toList();
           } else {
@@ -201,13 +234,18 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
           }
         }
       }
-      
+
       embeddingsList.add(embedding);
-      await _storage.write(key: 'face_embedding', value: jsonEncode(embeddingsList));
+      await _storage.write(
+        key: 'face_embedding',
+        value: jsonEncode(embeddingsList),
+      );
       await _storage.write(key: 'face_registered', value: 'true');
 
       // Clean up the temp photo file
-      try { await File(xFile.path).delete(); } catch (_) {}
+      try {
+        await File(xFile.path).delete();
+      } catch (_) {}
 
       setState(() {
         _success = true;
@@ -226,6 +264,13 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   }
 
   String _shortError(Object e) {
+    if (e is DioException) {
+      final data = e.response?.data;
+      if (data is Map && data['detail'] != null) {
+        return data['detail'].toString();
+      }
+      return 'Server error (${e.response?.statusCode ?? '-'})';
+    }
     final s = e.toString();
     return s.length > 60 ? s.substring(0, 60) : s;
   }
@@ -238,22 +283,25 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        title: const Text('Register Face', style: TextStyle(fontWeight: FontWeight.w700)),
+        title: const Text(
+          'Register Face',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
       ),
       body: _initialising
           ? const Center(child: CircularProgressIndicator(color: Colors.white))
           : (_cameraController == null)
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Text(
-                      _statusText,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white, fontSize: 15),
-                    ),
-                  ),
-                )
-              : Column(
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(
+                  _statusText,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white, fontSize: 15),
+                ),
+              ),
+            )
+          : Column(
               children: [
                 Expanded(
                   child: Stack(
@@ -278,12 +326,20 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                           ),
                           child: const Row(
                             children: [
-                              Icon(Icons.wb_sunny_rounded, color: Colors.amber, size: 20),
+                              Icon(
+                                Icons.wb_sunny_rounded,
+                                color: Colors.amber,
+                                size: 20,
+                              ),
                               SizedBox(width: 10),
                               Expanded(
                                 child: Text(
                                   'Keep your face in the oval under good light intensity.',
-                                  style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                  ),
                                 ),
                               ),
                             ],
@@ -296,7 +352,9 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                           size: Size.infinite,
                           painter: _OvalOverlayPainter(
                             success: _success,
-                            color: _success ? const Color(0xFF16A34A) : cs.primary,
+                            color: _success
+                                ? const Color(0xFF16A34A)
+                                : cs.primary,
                           ),
                         ),
                       ),
@@ -306,7 +364,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                         left: 24,
                         right: 24,
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
                           decoration: BoxDecoration(
                             color: Colors.black.withAlpha(160),
                             borderRadius: BorderRadius.circular(12),
@@ -314,7 +375,11 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                           child: Text(
                             _statusText,
                             textAlign: TextAlign.center,
-                            style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                         ),
                       ),
@@ -330,14 +395,21 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                       onPressed: _processing || _success ? null : _capture,
                       icon: _processing
                           ? const SizedBox(
-                              width: 20, height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
                             )
                           : const Icon(Icons.camera_alt_rounded),
                       label: Text(_processing ? 'Processing…' : 'Capture Face'),
                       style: FilledButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 16),
-                        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                        textStyle: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
                   ),
