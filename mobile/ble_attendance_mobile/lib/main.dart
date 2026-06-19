@@ -930,8 +930,13 @@ class _TeacherPageState extends State<TeacherPage> {
                   Row(children: [
                     const Icon(Icons.radio_button_checked, color: Colors.white, size: 16),
                     const SizedBox(width: 6),
-                    const Text('Session Active', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16)),
-                    const Spacer(),
+                    Expanded(
+                      child: Text(
+                        'Active Session details: Lecture Subject : ${_activeSubjectName ?? ""} & Subject Code : ${_selectedSlot?['subject_code'] ?? ""}',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
                     if (_summary != null)
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -939,12 +944,6 @@ class _TeacherPageState extends State<TeacherPage> {
                         child: Text('${_summary!['present_students']}/${_summary!['total_students']} present',
                             style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
                       ),
-                  ]),
-                  const SizedBox(height: 8),
-                  Wrap(spacing: 8, children: [
-                    _StatusChip(label: _isAdvertising ? 'BLE ON' : 'BLE OFF', active: _isAdvertising),
-                    _StatusChip(label: _isScanning ? 'Scan ON' : 'Scan OFF', active: _isScanning),
-                    _StatusChip(label: _finalizationOpen ? 'Finalization OPEN' : 'Hits ACTIVE', active: true),
                   ]),
                   const SizedBox(height: 10),
                   Text('Total hits sent: $_globalTotalHits', style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
@@ -1131,6 +1130,7 @@ class _StudentPageState extends State<StudentPage> {
 
   String? _sessionId;
   String? _subject;
+  String? _subjectCode;
   String? _teacherName;
   List<int> _studentDivisionIds = [];
   String? _studentIdentifier;
@@ -1284,7 +1284,8 @@ class _StudentPageState extends State<StudentPage> {
 
       setState(() {
         _sessionId = newId;
-        _subject = session['subject'] as String;
+        _subject = session['subject'] as String?;
+        _subjectCode = session['subject_code'] as String?;
         _teacherName = session['teacher_name'] as String?;
         _finalizationOpen = isOpen;
         _blePermissionsGranted = true;
@@ -1807,35 +1808,17 @@ class _StudentPageState extends State<StudentPage> {
                 ),
                 const SizedBox(width: 12),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(_subject != null ? 'Current Lecture' : 'No Active Lecture',
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: cs.onSurface.withAlpha(140), letterSpacing: 0.4)),
-                  if (_subject != null) ...[
-                    const SizedBox(height: 2),
-                    Text(_subject!, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                    if (_teacherName != null && _teacherName!.isNotEmpty)
-                      Text('Teacher: $_teacherName', style: TextStyle(fontSize: 13, color: cs.onSurface.withAlpha(160))),
+                  Text(_subject != null ? 'Lecture Subject : $_subject & Subject Code : ${_subjectCode ?? ""}' : 'No Active Lecture',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: cs.onSurface.withAlpha(200), letterSpacing: 0.2)),
+                  if (_subject != null && _teacherName != null && _teacherName!.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text('Teacher: $_teacherName', style: TextStyle(fontSize: 13, color: cs.onSurface.withAlpha(160))),
                   ],
                 ])),
               ]),
             ),
 
             const SizedBox(height: 16),
-
-            // Proximity indicator — big and prominent
-            Container(
-              padding: const EdgeInsets.symmetric(vertical: 28),
-              decoration: BoxDecoration(color: proximityBg, borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: proximityColor.withAlpha(80))),
-              child: Column(children: [
-                Icon(proximityIcon, size: 52, color: proximityColor),
-                const SizedBox(height: 10),
-                Text(proximityText, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: proximityColor)),
-                if (_latestRssi != null) ...[
-                  const SizedBox(height: 4),
-                  Text('Signal: ${_latestRssi} dBm', style: TextStyle(fontSize: 13, color: proximityColor.withAlpha(180))),
-                ],
-              ]),
-            ),
 
             const SizedBox(height: 16),
 
@@ -1845,9 +1828,11 @@ class _StudentPageState extends State<StudentPage> {
               decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16),
                   border: Border.all(color: const Color(0xFFE8E8E8))),
               child: Column(children: [
+                _StatusRow(icon: proximityIcon, label: 'STATUS', value: proximityText, active: _proximityOk ?? false),
+                const Divider(height: 16),
                 _StatusRow(icon: Icons.bluetooth_searching_rounded, label: 'BLE Scan', value: _scanning ? 'Active' : 'Off', active: _scanning),
                 const Divider(height: 16),
-                _StatusRow(icon: Icons.broadcast_on_personal_rounded, label: 'Advertising', value: _advertising ? (_studentIdentifier ?? 'On') : 'Off', active: _advertising),
+                _StatusRow(icon: Icons.broadcast_on_personal_rounded, label: 'Student ID', value: _advertising ? (_studentIdentifier ?? 'On') : 'Off', active: _advertising),
                 const Divider(height: 16),
                 _StatusRow(icon: Icons.how_to_reg_rounded, label: 'Finalization',
                     value: _finalizationOpen

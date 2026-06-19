@@ -49,6 +49,7 @@ class SessionCreateRequest(BaseModel):
 class SessionOut(BaseModel):
     id: str
     subject: str
+    subject_code: Optional[str] = None
     token: str
     teacher_user_id: str
     assignment_id: Optional[int] = None
