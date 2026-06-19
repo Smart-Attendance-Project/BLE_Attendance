@@ -365,6 +365,7 @@ class _TeacherPageState extends State<TeacherPage> {
   bool _finalizationOpen = false;
   bool _isScanning = false;
   String? _activeSubjectName;
+  String? _activeSubjectCode;
 
   Map<String, dynamic>? _summary;
   Map<String, String> _studentNames = {};
@@ -448,6 +449,7 @@ class _TeacherPageState extends State<TeacherPage> {
 
       _globalTotalHits = 0;
       _activeSubjectName = subjectName;
+      _activeSubjectCode = _selectedSlot!['subject_code'] as String?;
       _studentTallies.clear();
       _verifiedStudents.clear();
       _studentNames = {};
@@ -747,12 +749,15 @@ class _TeacherPageState extends State<TeacherPage> {
       final activeId = session['id'] as String;
       final activeToken = session['token'] as String;
       final activeSubject = (session['subject'] as String?) ?? 'Lecture';
+      final activeSubjectCode = session['subject_code'] as String?;
       final activeFinalization = (session['finalization_open'] as bool?) ?? false;
 
       setState(() {
         _sessionId = activeId;
         _token = activeToken;
         _finalizationOpen = activeFinalization;
+        _activeSubjectName = activeSubject;
+        _activeSubjectCode = activeSubjectCode;
       });
 
       // Automatically start BLE advertising and scanning when session is recovered
@@ -931,9 +936,23 @@ class _TeacherPageState extends State<TeacherPage> {
                     const Icon(Icons.radio_button_checked, color: Colors.white, size: 16),
                     const SizedBox(width: 6),
                     Expanded(
-                      child: Text(
-                        'Active Session details: Lecture Subject : ${_activeSubjectName ?? ""} & Subject Code : ${_selectedSlot?['subject_code'] ?? ""}',
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Active Session details:',
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Lecture Subject : ${_activeSubjectName ?? ""}',
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13),
+                          ),
+                          Text(
+                            'Subject Code : ${_activeSubjectCode ?? ""}',
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13),
+                          ),
+                        ],
                       ),
                     ),
                     const SizedBox(width: 8),
