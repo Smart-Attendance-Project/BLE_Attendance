@@ -359,6 +359,8 @@ class _TeacherPageState extends State<TeacherPage> {
 
   String? _sessionId;
   int? _activeDivisionId;
+  String? _activeDivisionStartStudentId;
+  String? _activeDivisionEndStudentId;
   String? _token;
   bool _loading = false;
   bool _isAdvertising = false;
@@ -440,10 +442,11 @@ class _TeacherPageState extends State<TeacherPage> {
       final subjectName = _selectedSlot!['subject_name'] as String;
       final assignmentId = _selectedSlot!['assignment_id'] as int;
       final divisionId = _selectedSlot!['division_id'] as int;
-
       final session = await widget.api.startSession(subjectName, assignmentId: assignmentId);
       _sessionId = session['id'] as String;
       _activeDivisionId = divisionId;
+      _activeDivisionStartStudentId = _selectedSlot!['start_student_id'] as String?;
+      _activeDivisionEndStudentId = _selectedSlot!['end_student_id'] as String?;
       _token = session['token'] as String;
       _finalizationOpen = (session['finalization_open'] as bool?) ?? false;
 
@@ -513,6 +516,15 @@ class _TeacherPageState extends State<TeacherPage> {
         final parsed = _extractStudentPayload(device);
         if (parsed == null || _sessionId == null) return;
         final studentId = parsed['student_id'] as String;
+
+        // Filter out students who are outside of active division range
+        if (_activeDivisionStartStudentId != null && studentId.compareTo(_activeDivisionStartStudentId!) < 0) {
+          return;
+        }
+        if (_activeDivisionEndStudentId != null && studentId.compareTo(_activeDivisionEndStudentId!) > 0) {
+          return;
+        }
+
         final hits = parsed['hits'] as int;
         final total = parsed['total'] as int;
         final verified = parsed['verified'] as bool;
@@ -758,6 +770,9 @@ class _TeacherPageState extends State<TeacherPage> {
         _finalizationOpen = activeFinalization;
         _activeSubjectName = activeSubject;
         _activeSubjectCode = activeSubjectCode;
+        _activeDivisionId = session['division_id'] as int?;
+        _activeDivisionStartStudentId = session['start_student_id'] as String?;
+        _activeDivisionEndStudentId = session['end_student_id'] as String?;
       });
 
       // Automatically start BLE advertising and scanning when session is recovered
@@ -1158,6 +1173,7 @@ class _StudentPageState extends State<StudentPage> {
   bool _advertising = false;
   bool _finalizationOpen = false;
   bool _blePermissionsGranted = true;
+  bool _serverSaidNoSession = false;
   String? _scanError;
   Timer? _scanRetryTimer;
   Timer? _sessionPollTimer;
@@ -1301,6 +1317,7 @@ class _StudentPageState extends State<StudentPage> {
         _updateStudentAdvertising();
       }
 
+      _serverSaidNoSession = false;
       setState(() {
         _sessionId = newId;
         _subject = session['subject'] as String?;
@@ -1317,7 +1334,7 @@ class _StudentPageState extends State<StudentPage> {
       // If server returns 404 (no active session), clear local session state
       // so the UI unfreezes (e.g. finalization button won't stay stuck).
       if (e is DioException && e.response?.statusCode == 404) {
-        if (_sessionId != null && _sessionId != 'ble-detected' && mounted) {
+        if ((_sessionId != null || _subject != null || _finalizationOpen) && mounted) {
           _totalBeaconReadings = 0;
           _inRangeHits = 0;
           _biometricDone = false;
@@ -1326,9 +1343,11 @@ class _StudentPageState extends State<StudentPage> {
           _rawProximityOk = null;
           _latestRssi = null;
           _updateStudentAdvertising();
+          _serverSaidNoSession = true;
           setState(() {
             _sessionId = null;
             _subject = null;
+            _subjectCode = null;
             _teacherName = null;
             _finalizationOpen = false;
           });
@@ -1464,11 +1483,13 @@ class _StudentPageState extends State<StudentPage> {
 
               setState(() {
                 _latestRssi = avgRssi;
-                _sessionId ??= 'ble-detected';
-                // Only use BLE-decoded subject if the server hasn't
-                // provided one yet (server data is more reliable).
-                if (_subject == null && payload['subject'] != null) {
-                  _subject = payload['subject'] as String;
+                // Only use BLE-detected session if the server hasn't
+                // explicitly said there's no session for this student.
+                if (!_serverSaidNoSession) {
+                  _sessionId ??= 'ble-detected';
+                  if (_subject == null && payload['subject'] != null) {
+                    _subject = payload['subject'] as String;
+                  }
                 }
               });
             }
@@ -1827,7 +1848,7 @@ class _StudentPageState extends State<StudentPage> {
                 ),
                 const SizedBox(width: 12),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(_subject != null ? 'Lecture Subject : $_subject & Subject Code : ${_subjectCode ?? ""}' : 'No Active Lecture',
+                  Text(_subject ?? 'No Active Lecture',
                       style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: cs.onSurface.withAlpha(200), letterSpacing: 0.2)),
                   if (_subject != null && _teacherName != null && _teacherName!.isNotEmpty) ...[
                     const SizedBox(height: 4),

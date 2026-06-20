@@ -87,6 +87,12 @@ def _run_migrations(engine):
                 conn.execute(text("ALTER TABLE users ADD COLUMN face_embedding JSON"))
             if "face_reg_timestamps" not in cols:
                 conn.execute(text("ALTER TABLE users ADD COLUMN face_reg_timestamps JSON"))
+        if "divisions" in tables:
+            cols = {c["name"] for c in inspector.get_columns("divisions")}
+            if "start_student_id" not in cols:
+                conn.execute(text("ALTER TABLE divisions ADD COLUMN start_student_id VARCHAR(16)"))
+            if "end_student_id" not in cols:
+                conn.execute(text("ALTER TABLE divisions ADD COLUMN end_student_id VARCHAR(16)"))
 
 
 @app.on_event("startup")
@@ -337,6 +343,15 @@ def submit_detection_batch(payload: BatchDetectionIn, db: Session = Depends(get_
         student = db.scalar(select(User).where(User.student_id == item.student_identifier))
         if not student:
             continue
+        
+        # Verify student is within division range if set
+        if session.assignment and session.assignment.division:
+            div = session.assignment.division
+            if div.start_student_id and item.student_identifier < div.start_student_id:
+                continue
+            if div.end_student_id and item.student_identifier > div.end_student_id:
+                continue
+
         db.add(Detection(session_id=item.session_id, student_user_id=student.id,
                          rssi=item.rssi, proximity_ok=item.proximity_ok))
         recorded += 1
@@ -698,7 +713,9 @@ def list_branches(db: Session = Depends(get_db), _: User = Depends(get_current_u
 def create_division(payload: DivisionIn, db: Session = Depends(get_db),
                     _: User = Depends(require_admin)):
     d = Division(branch_id=payload.branch_id, year=payload.year,
-                 div_number=payload.div_number, label=payload.label)
+                 div_number=payload.div_number, label=payload.label,
+                 start_student_id=payload.start_student_id,
+                 end_student_id=payload.end_student_id)
     db.add(d)
     db.commit()
     db.refresh(d)
@@ -987,6 +1004,8 @@ def teacher_today_slots_mobile(db: Session = Depends(get_db),
             "time_end": slot.time_end,
             "room": slot.room,
             "subject_type": a.subject.subject_type if a.subject else "lecture",
+            "start_student_id": a.division.start_student_id if a.division else None,
+            "end_student_id": a.division.end_student_id if a.division else None,
         })
     return result
 
@@ -1002,13 +1021,24 @@ def _get_own_session(db, session_id, teacher_id):
 
 def _session_out(s: LectureSession) -> SessionOut:
     subject_code = None
-    if s.assignment and s.assignment.subject:
-        subject_code = s.assignment.subject.code
+    start_student_id = None
+    end_student_id = None
+    division_id = None
+    if s.assignment:
+        division_id = s.assignment.division_id
+        if s.assignment.subject:
+            subject_code = s.assignment.subject.code
+        if s.assignment.division:
+            start_student_id = s.assignment.division.start_student_id
+            end_student_id = s.assignment.division.end_student_id
     return SessionOut(id=s.id, subject=s.subject, subject_code=subject_code, token=s.token,
                       teacher_user_id=s.teacher_user_id, assignment_id=s.assignment_id,
                       starts_at=s.starts_at, ends_at=s.ends_at, is_active=s.is_active,
                       finalization_open=s.finalization_open,
-                      attendance_locked=s.attendance_locked or False)
+                      attendance_locked=s.attendance_locked or False,
+                      start_student_id=start_student_id,
+                      end_student_id=end_student_id,
+                      division_id=division_id)
 
 
 def _sem_out(s: Semester) -> SemesterOut:
@@ -1020,7 +1050,9 @@ def _sem_out(s: Semester) -> SemesterOut:
 def _div_out(d: Division) -> DivisionOut:
     return DivisionOut(id=d.id, branch_id=d.branch_id, year=d.year,
                        div_number=d.div_number, label=d.label,
-                       branch_code=d.branch.code if d.branch else "")
+                       branch_code=d.branch.code if d.branch else "",
+                       start_student_id=d.start_student_id,
+                       end_student_id=d.end_student_id)
 
 
 def _assignment_out(a: TeacherAssignment) -> AssignmentOut:

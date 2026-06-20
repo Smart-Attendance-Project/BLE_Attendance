@@ -69,6 +69,8 @@ class Division(Base):
     year: Mapped[int] = mapped_column(Integer, nullable=False)  # 1,2,3,4
     div_number: Mapped[int] = mapped_column(Integer, nullable=False)  # 1,2
     label: Mapped[str] = mapped_column(String(20), nullable=False)  # e.g. "CE-FY-Div1"
+    start_student_id: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    end_student_id: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     branch: Mapped["Branch"] = relationship()
     batches: Mapped[list["Batch"]] = relationship(back_populates="division")

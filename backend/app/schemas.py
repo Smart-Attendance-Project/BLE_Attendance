@@ -58,6 +58,9 @@ class SessionOut(BaseModel):
     is_active: bool
     finalization_open: bool
     attendance_locked: bool = False
+    start_student_id: Optional[str] = None
+    end_student_id: Optional[str] = None
+    division_id: Optional[int] = None
 
 
 # ── Detection ─────────────────────────────────────────────────────────────────
@@ -157,6 +160,8 @@ class DivisionIn(BaseModel):
     year: int
     div_number: int
     label: str
+    start_student_id: Optional[str] = None
+    end_student_id: Optional[str] = None
 
 
 class DivisionOut(BaseModel):
@@ -166,6 +171,8 @@ class DivisionOut(BaseModel):
     div_number: int
     label: str
     branch_code: str = ""
+    start_student_id: Optional[str] = None
+    end_student_id: Optional[str] = None
 
 
 class BatchIn(BaseModel):

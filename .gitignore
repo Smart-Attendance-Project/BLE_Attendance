@@ -27,3 +27,7 @@ backend/.env
 .idea/
 .vscode/
 *.iml
+
+# Binaries
+*.apk
+

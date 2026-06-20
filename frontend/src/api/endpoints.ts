@@ -63,7 +63,7 @@ export const createBranch = (data: { code: string; name: string }) =>
 
 export const listDivisions = (branchId?: number) =>
   api.get('/admin/divisions', { params: branchId ? { branch_id: branchId } : {} }).then(r => r.data)
-export const createDivision = (data: { branch_id: number; year: number; div_number: number; label: string }) =>
+export const createDivision = (data: { branch_id: number; year: number; div_number: number; label: string; start_student_id?: string; end_student_id?: string }) =>
   api.post('/admin/divisions', data).then(r => r.data)
 
 export const listBatches = (divisionId?: number) =>
