@@ -940,12 +940,6 @@ class _TeacherPageState extends State<TeacherPage> {
                             style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
                       ),
                   ]),
-                  const SizedBox(height: 8),
-                  Wrap(spacing: 8, children: [
-                    _StatusChip(label: _isAdvertising ? 'BLE ON' : 'BLE OFF', active: _isAdvertising),
-                    _StatusChip(label: _isScanning ? 'Scan ON' : 'Scan OFF', active: _isScanning),
-                    _StatusChip(label: _finalizationOpen ? 'Finalization OPEN' : 'Hits ACTIVE', active: true),
-                  ]),
                   const SizedBox(height: 10),
                   Text('Total hits sent: $_globalTotalHits', style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
                 ]),
@@ -1806,16 +1800,12 @@ class _StudentPageState extends State<StudentPage> {
                   child: Icon(Icons.menu_book_rounded, color: _subject != null ? Colors.white : Colors.grey, size: 22),
                 ),
                 const SizedBox(width: 12),
-                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(_subject != null ? 'Current Lecture' : 'No Active Lecture',
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: cs.onSurface.withAlpha(140), letterSpacing: 0.4)),
-                  if (_subject != null) ...[
-                    const SizedBox(height: 2),
-                    Text(_subject!, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                    if (_teacherName != null && _teacherName!.isNotEmpty)
-                      Text('Teacher: $_teacherName', style: TextStyle(fontSize: 13, color: cs.onSurface.withAlpha(160))),
-                  ],
-                ])),
+                Expanded(
+                  child: Text(
+                    _subject ?? 'No Active Lecture',
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
+                ),
               ]),
             ),
 
@@ -1882,23 +1872,6 @@ class _StudentPageState extends State<StudentPage> {
               label: Text(_biometricDone ? 'Attendance Verified ✅' : 'Finalize Attendance (Face Scan)'),
             ),
 
-            if (Platform.isAndroid) ...[
-              const SizedBox(height: 10),
-              OutlinedButton.icon(
-                onPressed: () async {
-                  const intent = AndroidIntent(action: 'android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS');
-                  await intent.launch();
-                },
-                icon: const Icon(Icons.battery_saver_outlined),
-                label: const Text('Disable Battery Optimization'),
-              ),
-              const SizedBox(height: 6),
-              OutlinedButton.icon(
-                onPressed: _openAutoStartSettings,
-                icon: const Icon(Icons.settings_outlined),
-                label: const Text('Fix Background Restrictions'),
-              ),
-            ],
             const SizedBox(height: 8),
           ],
         ),
