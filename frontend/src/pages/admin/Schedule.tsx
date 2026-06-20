@@ -47,10 +47,17 @@ export default function Schedule() {
   const [branchForm, setBranchForm] = useState({ code: '', name: '' })
   const branchMut = useMutation({ mutationFn: () => createBranch(branchForm), onSuccess: () => { qc.invalidateQueries({ queryKey: ['branches'] }); setBranchForm({ code: '', name: '' }) } })
 
-  const [divForm, setDivForm] = useState({ branch_id: '', year: '1', div_number: '1', label: '' })
+  const [divForm, setDivForm] = useState({ branch_id: '', year: '1', div_number: '1', label: '', start_student_id: '', end_student_id: '' })
   const divMut = useMutation({
-    mutationFn: () => createDivision({ branch_id: Number(divForm.branch_id), year: Number(divForm.year), div_number: Number(divForm.div_number), label: divForm.label }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['divisions'] }); setDivForm({ branch_id: '', year: '1', div_number: '1', label: '' }) },
+    mutationFn: () => createDivision({
+      branch_id: Number(divForm.branch_id),
+      year: Number(divForm.year),
+      div_number: Number(divForm.div_number),
+      label: divForm.label,
+      start_student_id: divForm.start_student_id || undefined,
+      end_student_id: divForm.end_student_id || undefined
+    }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['divisions'] }); setDivForm({ branch_id: '', year: '1', div_number: '1', label: '', start_student_id: '', end_student_id: '' }) },
   })
 
   const [batchDivId, setBatchDivId] = useState('')
@@ -171,15 +178,30 @@ export default function Schedule() {
               </div>
               <div className="flex gap-3">
                 <input className={`${inp} flex-1`} placeholder="Label (e.g. CE-FY-Div1)" value={divForm.label} onChange={e => setDivForm(f => ({ ...f, label: e.target.value }))} />
+              </div>
+              <div className="flex gap-3">
+                <input className={`${inp} flex-1`} placeholder="Start Student ID (Optional)" value={divForm.start_student_id} onChange={e => setDivForm(f => ({ ...f, start_student_id: e.target.value }))} />
+                <input className={`${inp} flex-1`} placeholder="End Student ID (Optional)" value={divForm.end_student_id} onChange={e => setDivForm(f => ({ ...f, end_student_id: e.target.value }))} />
                 <button className={btn} onClick={() => divMut.mutate()} disabled={!divForm.branch_id || !divForm.label}>Add</button>
               </div>
             </div>
             <div className="flex flex-col divide-y divide-zinc-200">
               {divisions.map((d: any) => (
-                <div key={d.id} className="flex items-center gap-4 py-2.5">
-                  <span className="font-mono text-sm text-zinc-400 w-14">{d.branch_code}</span>
-                  <span className="text-zinc-800 font-medium">{d.label}</span>
-                  <span className="text-zinc-400 text-sm ml-auto">Year {d.year}</span>
+                <div key={d.id} className="flex items-center justify-between gap-4 py-2.5">
+                  <div className="flex items-center gap-4">
+                    <span className="font-mono text-sm text-zinc-400 w-14">{d.branch_code}</span>
+                    <span className="text-zinc-800 font-medium">{d.label}</span>
+                  </div>
+                  <div className="flex items-center gap-4 text-sm text-zinc-400 font-medium">
+                    {d.start_student_id || d.end_student_id ? (
+                      <span className="font-mono bg-zinc-100 border border-zinc-200 px-2 py-0.5 rounded text-xs text-zinc-600">
+                        {d.start_student_id || '...'} - {d.end_student_id || '...'}
+                      </span>
+                    ) : (
+                      <span className="text-zinc-300 italic text-xs">No range filter</span>
+                    )}
+                    <span>Year {d.year}</span>
+                  </div>
                 </div>
               ))}
             </div>

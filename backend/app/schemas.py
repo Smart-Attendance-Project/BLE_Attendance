@@ -20,12 +20,19 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class StudentEnrollmentOut(BaseModel):
+    division_id: int
+    batch_id: Optional[int] = None
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     role: UserRole
     full_name: str
     user_id: str
+    division_ids: list[int] = Field(default_factory=list)
+    enrollments: list[StudentEnrollmentOut] = Field(default_factory=list)
 
 
 class UserOut(BaseModel):
@@ -48,6 +55,7 @@ class SessionCreateRequest(BaseModel):
 class SessionOut(BaseModel):
     id: str
     subject: str
+    subject_code: Optional[str] = None
     token: str
     teacher_user_id: str
     assignment_id: Optional[int] = None
@@ -56,6 +64,10 @@ class SessionOut(BaseModel):
     is_active: bool
     finalization_open: bool
     attendance_locked: bool = False
+    start_student_id: Optional[str] = None
+    end_student_id: Optional[str] = None
+    division_id: Optional[int] = None
+    batch_id: Optional[int] = None
 
 
 # ── Detection ─────────────────────────────────────────────────────────────────
@@ -155,6 +167,8 @@ class DivisionIn(BaseModel):
     year: int
     div_number: int
     label: str
+    start_student_id: Optional[str] = None
+    end_student_id: Optional[str] = None
 
 
 class DivisionOut(BaseModel):
@@ -164,6 +178,8 @@ class DivisionOut(BaseModel):
     div_number: int
     label: str
     branch_code: str = ""
+    start_student_id: Optional[str] = None
+    end_student_id: Optional[str] = None
 
 
 class BatchIn(BaseModel):

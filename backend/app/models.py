@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     Boolean, Date, DateTime, Enum as SqlEnum, Float, ForeignKey,
-    Integer, String, Time, UniqueConstraint,
+    Integer, JSON, String, Time, UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -30,6 +30,8 @@ class User(Base):
     biometric_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     is_super_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    face_embedding: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    face_reg_timestamps: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
 class Semester(Base):
@@ -67,6 +69,8 @@ class Division(Base):
     year: Mapped[int] = mapped_column(Integer, nullable=False)  # 1,2,3,4
     div_number: Mapped[int] = mapped_column(Integer, nullable=False)  # 1,2
     label: Mapped[str] = mapped_column(String(20), nullable=False)  # e.g. "CE-FY-Div1"
+    start_student_id: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    end_student_id: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     branch: Mapped["Branch"] = relationship()
     batches: Mapped[list["Batch"]] = relationship(back_populates="division")

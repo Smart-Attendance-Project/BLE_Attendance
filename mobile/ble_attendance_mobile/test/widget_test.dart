@@ -12,6 +12,7 @@ import 'package:ble_attendance_mobile/main.dart';
 void main() {
   testWidgets('App loads login screen', (WidgetTester tester) async {
     await tester.pumpWidget(const BleAttendanceApp());
-    expect(find.text('BLE Attendance Login'), findsOneWidget);
+    expect(find.text('BLE Attendance'), findsOneWidget);
+    expect(find.text('Sign in to continue'), findsOneWidget);
   });
 }

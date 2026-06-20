@@ -1,48 +1,75 @@
-import { Navigate, Route, Routes } from 'react-router-dom'
-import { useAuth } from './components/AuthContext'
-import { Nav } from './components/Nav'
-import { RequireAuth } from './components/RequireAuth'
-import Login from './pages/auth/Login'
-import TeacherDashboard from './pages/teacher/Dashboard'
-import SessionList from './pages/teacher/SessionList'
-import Export from './pages/teacher/Export'
-import Students from './pages/teacher/Students'
-import ChangePassword from './pages/teacher/ChangePassword'
-import AdminDashboard from './pages/admin/Dashboard'
-import Teachers from './pages/admin/Teachers'
-import Admins from './pages/admin/Admins'
-import Subjects from './pages/admin/Subjects'
-import Schedule from './pages/admin/Schedule'
-
-function RootRedirect() {
-  const { user } = useAuth()
-  if (!user) return <Navigate to="/login" replace />
-  if (user.role === 'admin') return <Navigate to="/admin" replace />
-  if (user.role === 'teacher') return <Navigate to="/teacher" replace />
-  return <Navigate to="/login" replace />
-}
+import { useEffect, useState } from "react";
+import { useAuth } from "./components/AuthContext";
+import { Shell } from "./app/components/layout/Shell";
+import type { NavKey } from "./app/lib/types";
+import { Login } from "./app/pages/Login";
+import { ChangePassword } from "./app/pages/ChangePassword";
+import { TeacherDashboard } from "./app/pages/teacher/Dashboard";
+import { Sessions } from "./app/pages/teacher/Sessions";
+import { Export } from "./app/pages/teacher/Export";
+import { Students } from "./app/pages/teacher/Students";
+import { AdminDashboard } from "./app/pages/admin/Dashboard";
+import { Teachers } from "./app/pages/admin/Teachers";
+import { Admins } from "./app/pages/admin/Admins";
+import { Subjects } from "./app/pages/admin/Subjects";
+import { Schedule } from "./app/pages/admin/Schedule";
 
 export default function App() {
-  const { user } = useAuth()
+  const { user, loading, logout } = useAuth();
+  const [page, setPage] = useState<NavKey>("dashboard");
+
+  useEffect(() => {
+    if (user) setPage("dashboard");
+  }, [user]);
+
+  if (loading) {
+    return <div className="min-h-screen bg-background" />;
+  }
+
+  if (!user) {
+    return <Login />;
+  }
+
+  function render() {
+    if (page === "password") return <ChangePassword />;
+    if (user.role === "teacher") {
+      switch (page) {
+        case "sessions":
+          return <Sessions />;
+        case "export":
+          return <Export />;
+        case "students":
+          return <Students />;
+        default:
+          return <TeacherDashboard onGoSessions={() => setPage("sessions")} />;
+      }
+    }
+    switch (page) {
+      case "teachers":
+        return <Teachers />;
+      case "admins":
+        return <Admins />;
+      case "subjects":
+        return <Subjects />;
+      case "schedule":
+        return <Schedule />;
+      default:
+        return <AdminDashboard onNavigate={setPage} />;
+    }
+  }
+
   return (
-    <>
-      {user && <Nav />}
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/" element={<RootRedirect />} />
-
-        <Route path="/teacher" element={<RequireAuth role="teacher"><TeacherDashboard /></RequireAuth>} />
-        <Route path="/teacher/sessions" element={<RequireAuth role="teacher"><SessionList /></RequireAuth>} />
-        <Route path="/teacher/export" element={<RequireAuth role="teacher"><Export /></RequireAuth>} />
-        <Route path="/teacher/students" element={<RequireAuth role="teacher"><Students /></RequireAuth>} />
-        <Route path="/teacher/password" element={<RequireAuth role="teacher"><ChangePassword /></RequireAuth>} />
-
-        <Route path="/admin" element={<RequireAuth role="admin"><AdminDashboard /></RequireAuth>} />
-        <Route path="/admin/teachers" element={<RequireAuth role="admin"><Teachers /></RequireAuth>} />
-        <Route path="/admin/admins" element={<RequireAuth role="admin"><Admins /></RequireAuth>} />
-        <Route path="/admin/subjects" element={<RequireAuth role="admin"><Subjects /></RequireAuth>} />
-        <Route path="/admin/schedule" element={<RequireAuth role="admin"><Schedule /></RequireAuth>} />
-      </Routes>
-    </>
-  )
+    <Shell
+      role={user.role}
+      current={page}
+      onNavigate={setPage}
+      onLogout={logout}
+      userName={user.full_name}
+      isSuperAdmin={user.is_super_admin}
+    >
+      <div key={page} className="animate-page-in">
+        {render()}
+      </div>
+    </Shell>
+  );
 }

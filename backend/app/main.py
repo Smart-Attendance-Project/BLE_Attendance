@@ -1,5 +1,6 @@
 import io
 import secrets
+import math
 from datetime import datetime, date, timezone, timedelta
 import re
 
@@ -54,12 +55,20 @@ def _run_migrations(engine):
     inspector = inspect(engine)
     tables = inspector.get_table_names()
 
-    with engine.begin() as conn:
+    # ALTER TYPE must run outside any transaction block on PostgreSQL —
+    # if it errors (e.g. value already exists on older PG without IF NOT EXISTS
+    # support, or on SQLite), the connection would be left in an aborted state,
+    # causing every subsequent DDL statement in the same transaction to silently
+    # fail.  Using AUTOCOMMIT isolation level gives us a bare connection with no
+    # wrapping transaction, so the error is fully isolated.
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
         try:
             conn.execute(text("ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'admin'"))
         except Exception:
-            pass  # SQLite doesn't support ALTER TYPE
+            pass  # value already present, or SQLite (no enum types)
 
+    # All remaining DDL runs in its own clean transaction.
+    with engine.begin() as conn:
         if "sessions" in tables:
             cols = {c["name"] for c in inspector.get_columns("sessions")}
             if "finalization_open" not in cols:
@@ -74,6 +83,16 @@ def _run_migrations(engine):
                 conn.execute(text("ALTER TABLE users ADD COLUMN admin_id VARCHAR(16) UNIQUE"))
             if "is_super_admin" not in cols:
                 conn.execute(text("ALTER TABLE users ADD COLUMN is_super_admin BOOLEAN DEFAULT FALSE"))
+            if "face_embedding" not in cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN face_embedding JSON"))
+            if "face_reg_timestamps" not in cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN face_reg_timestamps JSON"))
+        if "divisions" in tables:
+            cols = {c["name"] for c in inspector.get_columns("divisions")}
+            if "start_student_id" not in cols:
+                conn.execute(text("ALTER TABLE divisions ADD COLUMN start_student_id VARCHAR(16)"))
+            if "end_student_id" not in cols:
+                conn.execute(text("ALTER TABLE divisions ADD COLUMN end_student_id VARCHAR(16)"))
 
 
 @app.on_event("startup")
@@ -118,8 +137,23 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     if user is None:
         raise HTTPException(status_code=401, detail="Invalid credentials")
     token = create_access_token(subject=user.id)
+    # For students, include their enrolled division IDs so the mobile app
+    # can filter BLE beacons locally without further server calls.
+    div_ids: list[int] = []
+    enrollments: list[dict] = []
+    if user.role == UserRole.student:
+        rows = db.execute(
+            select(DivisionStudent.division_id, DivisionStudent.batch_id)
+            .where(DivisionStudent.student_user_id == user.id)
+        ).all()
+        div_ids = sorted({division_id for division_id, _ in rows})
+        enrollments = [
+            {"division_id": division_id, "batch_id": batch_id}
+            for division_id, batch_id in rows
+        ]
     return TokenResponse(access_token=token, role=user.role,
-                         full_name=user.full_name, user_id=user.id)
+                         full_name=user.full_name, user_id=user.id,
+                         division_ids=div_ids, enrollments=enrollments)
 
 
 @app.get("/auth/me", response_model=UserOut)
@@ -146,11 +180,96 @@ def change_password(
     return {"message": "Password changed successfully"}
 
 
+MAX_FACE_REGISTRATIONS_PER_MONTH = 2
+
+
+@app.post("/auth/register-face")
+def register_face(
+    payload: dict,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Save face embedding to DB. Called on first registration."""
+    embedding = payload.get("embedding")
+    if not embedding or not isinstance(embedding, list):
+        raise HTTPException(status_code=422, detail="embedding must be a list of floats")
+
+    now = _now_ist()
+    user.face_embedding = [embedding]  # Save as a list containing the primary embedding
+    timestamps = user.face_reg_timestamps or []
+    timestamps.append(now.isoformat())
+    user.face_reg_timestamps = timestamps
+    db.commit()
+    return {"message": "Face registered", "face_registered": True}
+
+
+@app.get("/auth/face-profile")
+def get_face_profile(
+    user: User = Depends(get_current_user),
+):
+    """Return saved face embedding for syncing to device."""
+    if not user.face_embedding:
+        raise HTTPException(status_code=404, detail="No face profile registered")
+    return {"embedding": user.face_embedding, "face_registered": True}
+
+
+@app.post("/auth/re-register-face")
+def re_register_face(
+    payload: dict,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Re-register face. Verifies similarity against the primary embedding and appends it."""
+    embedding = payload.get("embedding")
+    if not embedding or not isinstance(embedding, list):
+        raise HTTPException(status_code=422, detail="embedding must be a list of floats")
+
+    from sqlalchemy.orm.attributes import flag_modified
+
+    # Verify vector embedding matches existing registered face if present
+    if user.face_embedding:
+        existing_list = user.face_embedding
+        # Handle backward compatibility: migrate single list to list-of-lists
+        if len(existing_list) > 0 and not isinstance(existing_list[0], list):
+            existing_list = [existing_list]
+
+        primary = existing_list[0]
+        if len(primary) != len(embedding):
+            raise HTTPException(status_code=422, detail="Invalid embedding dimensions")
+
+        dist = math.sqrt(sum((a - b) ** 2 for a, b in zip(primary, embedding)))
+        # 0.85 matches defaultThreshold in face_recognizer.dart
+        if dist >= 0.85:
+            raise HTTPException(
+                status_code=400,
+                detail="Face does not match original profile."
+            )
+
+        # Append new embedding alongside old ones
+        existing_list.append(embedding)
+        user.face_embedding = existing_list
+        flag_modified(user, "face_embedding")
+    else:
+        user.face_embedding = [embedding]
+
+    now = _now_ist()
+    timestamps = user.face_reg_timestamps or []
+    timestamps.append(now.isoformat())
+    user.face_reg_timestamps = timestamps
+    db.commit()
+    return {"message": "Face re-registered", "face_registered": True}
+
+
 # ── BLE Sessions ──────────────────────────────────────────────────────────────
 
 @app.post("/sessions", response_model=SessionOut)
 def start_session(payload: SessionCreateRequest, db: Session = Depends(get_db),
                   teacher: User = Depends(require_role(UserRole.teacher))):
+    if payload.assignment_id is None:
+        raise HTTPException(status_code=422, detail="A class assignment is required")
+    assignment = db.get(TeacherAssignment, payload.assignment_id)
+    if not assignment or assignment.teacher_user_id != teacher.id:
+        raise HTTPException(status_code=404, detail="Assignment not found")
     active = db.scalar(select(LectureSession).where(
         and_(LectureSession.teacher_user_id == teacher.id, LectureSession.is_active.is_(True))
     ))
@@ -183,13 +302,20 @@ def get_active_session(db: Session = Depends(get_db), current_user: User = Depen
     if current_user.role == UserRole.teacher:
         q = q.where(LectureSession.teacher_user_id == current_user.id)
     elif current_user.role == UserRole.student:
-        # Students should only see sessions for their enrolled division/batch
-        div_ids = [row for row in db.execute(
-            select(DivisionStudent.division_id).where(DivisionStudent.student_user_id == current_user.id)
-        ).scalars().all()]
-        if div_ids:
-            q = q.join(TeacherAssignment, LectureSession.assignment_id == TeacherAssignment.id)
-            q = q.where(TeacherAssignment.division_id.in_(div_ids))
+        # Students should only see sessions for their enrolled division/batch.
+        # Batch-scoped classes require the matching batch; division-scoped
+        # lectures accept any student enrolled in that division.
+        q = (
+            q.join(TeacherAssignment, LectureSession.assignment_id == TeacherAssignment.id)
+            .join(DivisionStudent, DivisionStudent.division_id == TeacherAssignment.division_id)
+            .where(DivisionStudent.student_user_id == current_user.id)
+            .where(
+                (TeacherAssignment.batch_id.is_(None))
+                | (DivisionStudent.batch_id == TeacherAssignment.batch_id)
+            )
+        )
+    else:
+        raise HTTPException(status_code=403, detail="Unsupported role")
     session = db.scalar(q.order_by(desc(LectureSession.starts_at)))
     if session is None:
         raise HTTPException(status_code=404, detail="No active session")
@@ -216,6 +342,8 @@ def submit_detection(payload: DetectionIn, db: Session = Depends(get_db),
     session = db.get(LectureSession, payload.session_id)
     if session is None or not session.is_active:
         raise HTTPException(status_code=404, detail="Active session not found")
+    if not _student_is_in_session(db, student.id, session):
+        raise HTTPException(status_code=403, detail="Student is not enrolled in this class")
     db.add(Detection(session_id=payload.session_id, student_user_id=student.id,
                      rssi=payload.rssi, proximity_ok=payload.proximity_ok))
     db.commit()
@@ -233,6 +361,17 @@ def submit_detection_batch(payload: BatchDetectionIn, db: Session = Depends(get_
         student = db.scalar(select(User).where(User.student_id == item.student_identifier))
         if not student:
             continue
+        if not _student_is_in_session(db, student.id, session):
+            continue
+
+        # Verify student is within division range if set
+        if session.assignment and session.assignment.division:
+            div = session.assignment.division
+            if div.start_student_id and item.student_identifier < div.start_student_id:
+                continue
+            if div.end_student_id and item.student_identifier > div.end_student_id:
+                continue
+
         db.add(Detection(session_id=item.session_id, student_user_id=student.id,
                          rssi=item.rssi, proximity_ok=item.proximity_ok))
         recorded += 1
@@ -248,6 +387,8 @@ def finalize_attendance(payload: AttendanceFinalizeIn, db: Session = Depends(get
     session = db.get(LectureSession, payload.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    if not _student_is_in_session(db, student.id, session):
+        raise HTTPException(status_code=403, detail="Student is not enrolled in this class")
     if not session.finalization_open:
         raise HTTPException(status_code=409, detail="Finalization not open")
     att = upsert_attendance(db=db, session_id=payload.session_id,
@@ -276,6 +417,8 @@ def override_attendance(session_id: str, payload: AttendanceOverrideIn,
     student = db.get(User, payload.student_user_id)
     if not student or student.role != UserRole.student:
         raise HTTPException(status_code=404, detail="Student not found")
+    if not _student_is_in_session(db, student.id, session):
+        raise HTTPException(status_code=403, detail="Student is not enrolled in this class")
     att = db.scalar(select(Attendance).where(
         and_(Attendance.session_id == session_id, Attendance.student_user_id == payload.student_user_id)
     ))
@@ -594,7 +737,9 @@ def list_branches(db: Session = Depends(get_db), _: User = Depends(get_current_u
 def create_division(payload: DivisionIn, db: Session = Depends(get_db),
                     _: User = Depends(require_admin)):
     d = Division(branch_id=payload.branch_id, year=payload.year,
-                 div_number=payload.div_number, label=payload.label)
+                 div_number=payload.div_number, label=payload.label,
+                 start_student_id=payload.start_student_id,
+                 end_student_id=payload.end_student_id)
     db.add(d)
     db.commit()
     db.refresh(d)
@@ -797,6 +942,11 @@ def admin_override_attendance(session_id: str, payload: AttendanceOverrideIn,
         raise HTTPException(status_code=404, detail="Session not found")
     if session.attendance_locked:
         raise HTTPException(status_code=409, detail="Attendance is locked")
+    student = db.get(User, payload.student_user_id)
+    if not student or student.role != UserRole.student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    if not _student_is_in_session(db, student.id, session):
+        raise HTTPException(status_code=403, detail="Student is not enrolled in this class")
     att = db.scalar(select(Attendance).where(
         and_(Attendance.session_id == session_id, Attendance.student_user_id == payload.student_user_id)
     ))
@@ -829,6 +979,8 @@ def batch_submit_attendance(
     for item in payload:
         student = db.scalar(select(User).where(User.student_id == item["student_id"]))
         if not student:
+            continue
+        if not _student_is_in_session(db, student.id, session):
             continue
         att = db.scalar(select(Attendance).where(
             and_(Attendance.session_id == session_id,
@@ -876,12 +1028,16 @@ def teacher_today_slots_mobile(db: Session = Depends(get_db),
             "assignment_id": slot.assignment_id,
             "subject_name": a.subject.name if a.subject else "",
             "subject_code": a.subject.code if a.subject else "",
+            "division_id": a.division_id,
+            "batch_id": a.batch_id,
             "division_label": a.division.label if a.division else "",
             "batch_label": a.batch.label if a.batch else None,
             "time_start": slot.time_start,
             "time_end": slot.time_end,
             "room": slot.room,
             "subject_type": a.subject.subject_type if a.subject else "lecture",
+            "start_student_id": a.division.start_student_id if a.division else None,
+            "end_student_id": a.division.end_student_id if a.division else None,
         })
     return result
 
@@ -895,12 +1051,44 @@ def _get_own_session(db, session_id, teacher_id):
     return session
 
 
+def _student_is_in_session(db, student_user_id: str, session: LectureSession) -> bool:
+    assignment = session.assignment
+    if assignment is None:
+        return False
+    q = select(DivisionStudent).where(
+        and_(
+            DivisionStudent.student_user_id == student_user_id,
+            DivisionStudent.division_id == assignment.division_id,
+        )
+    )
+    if assignment.batch_id is not None:
+        q = q.where(DivisionStudent.batch_id == assignment.batch_id)
+    return db.scalar(q) is not None
+
+
 def _session_out(s: LectureSession) -> SessionOut:
-    return SessionOut(id=s.id, subject=s.subject, token=s.token,
+    subject_code = None
+    start_student_id = None
+    end_student_id = None
+    division_id = None
+    batch_id = None
+    if s.assignment:
+        division_id = s.assignment.division_id
+        batch_id = s.assignment.batch_id
+        if s.assignment.subject:
+            subject_code = s.assignment.subject.code
+        if s.assignment.division:
+            start_student_id = s.assignment.division.start_student_id
+            end_student_id = s.assignment.division.end_student_id
+    return SessionOut(id=s.id, subject=s.subject, subject_code=subject_code, token=s.token,
                       teacher_user_id=s.teacher_user_id, assignment_id=s.assignment_id,
                       starts_at=s.starts_at, ends_at=s.ends_at, is_active=s.is_active,
                       finalization_open=s.finalization_open,
-                      attendance_locked=s.attendance_locked or False)
+                      attendance_locked=s.attendance_locked or False,
+                      start_student_id=start_student_id,
+                      end_student_id=end_student_id,
+                      division_id=division_id,
+                      batch_id=batch_id)
 
 
 def _sem_out(s: Semester) -> SemesterOut:
@@ -912,7 +1100,9 @@ def _sem_out(s: Semester) -> SemesterOut:
 def _div_out(d: Division) -> DivisionOut:
     return DivisionOut(id=d.id, branch_id=d.branch_id, year=d.year,
                        div_number=d.div_number, label=d.label,
-                       branch_code=d.branch.code if d.branch else "")
+                       branch_code=d.branch.code if d.branch else "",
+                       start_student_id=d.start_student_id,
+                       end_student_id=d.end_student_id)
 
 
 def _assignment_out(a: TeacherAssignment) -> AssignmentOut:

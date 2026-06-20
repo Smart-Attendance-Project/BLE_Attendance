@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.2.0+3
+version: 2.1.0+4
 
 environment:
   sdk: ^3.11.3
@@ -38,10 +38,13 @@ dependencies:
   flutter_secure_storage: ^9.2.4
   flutter_reactive_ble: ^5.4.0
   flutter_ble_peripheral: ^2.1.0
-  local_auth: ^3.0.1
   permission_handler: ^12.0.1
   android_intent_plus: ^5.3.1
   flutter_foreground_task: ^8.12.0
+  camera: ^0.11.1
+  google_mlkit_face_detection: ^0.12.0
+  tflite_flutter: ^0.11.0
+  image: ^4.5.3
 
 dev_dependencies:
   flutter_test:
@@ -64,6 +67,9 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/mobilefacenet.tflite
 
   # To add assets to your application, add an assets section, like this:
   # assets:
