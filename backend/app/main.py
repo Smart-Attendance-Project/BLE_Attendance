@@ -140,16 +140,20 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     # For students, include their enrolled division IDs so the mobile app
     # can filter BLE beacons locally without further server calls.
     div_ids: list[int] = []
+    enrollments: list[dict] = []
     if user.role == UserRole.student:
-        div_ids = [
-            row for row in db.execute(
-                select(DivisionStudent.division_id)
-                .where(DivisionStudent.student_user_id == user.id)
-            ).scalars().all()
+        rows = db.execute(
+            select(DivisionStudent.division_id, DivisionStudent.batch_id)
+            .where(DivisionStudent.student_user_id == user.id)
+        ).all()
+        div_ids = sorted({division_id for division_id, _ in rows})
+        enrollments = [
+            {"division_id": division_id, "batch_id": batch_id}
+            for division_id, batch_id in rows
         ]
     return TokenResponse(access_token=token, role=user.role,
                          full_name=user.full_name, user_id=user.id,
-                         division_ids=div_ids)
+                         division_ids=div_ids, enrollments=enrollments)
 
 
 @app.get("/auth/me", response_model=UserOut)
@@ -261,6 +265,11 @@ def re_register_face(
 @app.post("/sessions", response_model=SessionOut)
 def start_session(payload: SessionCreateRequest, db: Session = Depends(get_db),
                   teacher: User = Depends(require_role(UserRole.teacher))):
+    if payload.assignment_id is None:
+        raise HTTPException(status_code=422, detail="A class assignment is required")
+    assignment = db.get(TeacherAssignment, payload.assignment_id)
+    if not assignment or assignment.teacher_user_id != teacher.id:
+        raise HTTPException(status_code=404, detail="Assignment not found")
     active = db.scalar(select(LectureSession).where(
         and_(LectureSession.teacher_user_id == teacher.id, LectureSession.is_active.is_(True))
     ))
@@ -293,13 +302,20 @@ def get_active_session(db: Session = Depends(get_db), current_user: User = Depen
     if current_user.role == UserRole.teacher:
         q = q.where(LectureSession.teacher_user_id == current_user.id)
     elif current_user.role == UserRole.student:
-        # Students should only see sessions for their enrolled division/batch
-        div_ids = [row for row in db.execute(
-            select(DivisionStudent.division_id).where(DivisionStudent.student_user_id == current_user.id)
-        ).scalars().all()]
-        if div_ids:
-            q = q.join(TeacherAssignment, LectureSession.assignment_id == TeacherAssignment.id)
-            q = q.where(TeacherAssignment.division_id.in_(div_ids))
+        # Students should only see sessions for their enrolled division/batch.
+        # Batch-scoped classes require the matching batch; division-scoped
+        # lectures accept any student enrolled in that division.
+        q = (
+            q.join(TeacherAssignment, LectureSession.assignment_id == TeacherAssignment.id)
+            .join(DivisionStudent, DivisionStudent.division_id == TeacherAssignment.division_id)
+            .where(DivisionStudent.student_user_id == current_user.id)
+            .where(
+                (TeacherAssignment.batch_id.is_(None))
+                | (DivisionStudent.batch_id == TeacherAssignment.batch_id)
+            )
+        )
+    else:
+        raise HTTPException(status_code=403, detail="Unsupported role")
     session = db.scalar(q.order_by(desc(LectureSession.starts_at)))
     if session is None:
         raise HTTPException(status_code=404, detail="No active session")
@@ -326,6 +342,8 @@ def submit_detection(payload: DetectionIn, db: Session = Depends(get_db),
     session = db.get(LectureSession, payload.session_id)
     if session is None or not session.is_active:
         raise HTTPException(status_code=404, detail="Active session not found")
+    if not _student_is_in_session(db, student.id, session):
+        raise HTTPException(status_code=403, detail="Student is not enrolled in this class")
     db.add(Detection(session_id=payload.session_id, student_user_id=student.id,
                      rssi=payload.rssi, proximity_ok=payload.proximity_ok))
     db.commit()
@@ -342,6 +360,8 @@ def submit_detection_batch(payload: BatchDetectionIn, db: Session = Depends(get_
             continue
         student = db.scalar(select(User).where(User.student_id == item.student_identifier))
         if not student:
+            continue
+        if not _student_is_in_session(db, student.id, session):
             continue
         
         # Verify student is within division range if set
@@ -367,6 +387,8 @@ def finalize_attendance(payload: AttendanceFinalizeIn, db: Session = Depends(get
     session = db.get(LectureSession, payload.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    if not _student_is_in_session(db, student.id, session):
+        raise HTTPException(status_code=403, detail="Student is not enrolled in this class")
     if not session.finalization_open:
         raise HTTPException(status_code=409, detail="Finalization not open")
     att = upsert_attendance(db=db, session_id=payload.session_id,
@@ -395,6 +417,8 @@ def override_attendance(session_id: str, payload: AttendanceOverrideIn,
     student = db.get(User, payload.student_user_id)
     if not student or student.role != UserRole.student:
         raise HTTPException(status_code=404, detail="Student not found")
+    if not _student_is_in_session(db, student.id, session):
+        raise HTTPException(status_code=403, detail="Student is not enrolled in this class")
     att = db.scalar(select(Attendance).where(
         and_(Attendance.session_id == session_id, Attendance.student_user_id == payload.student_user_id)
     ))
@@ -918,6 +942,11 @@ def admin_override_attendance(session_id: str, payload: AttendanceOverrideIn,
         raise HTTPException(status_code=404, detail="Session not found")
     if session.attendance_locked:
         raise HTTPException(status_code=409, detail="Attendance is locked")
+    student = db.get(User, payload.student_user_id)
+    if not student or student.role != UserRole.student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    if not _student_is_in_session(db, student.id, session):
+        raise HTTPException(status_code=403, detail="Student is not enrolled in this class")
     att = db.scalar(select(Attendance).where(
         and_(Attendance.session_id == session_id, Attendance.student_user_id == payload.student_user_id)
     ))
@@ -950,6 +979,8 @@ def batch_submit_attendance(
     for item in payload:
         student = db.scalar(select(User).where(User.student_id == item["student_id"]))
         if not student:
+            continue
+        if not _student_is_in_session(db, student.id, session):
             continue
         att = db.scalar(select(Attendance).where(
             and_(Attendance.session_id == session_id,
@@ -998,6 +1029,7 @@ def teacher_today_slots_mobile(db: Session = Depends(get_db),
             "subject_name": a.subject.name if a.subject else "",
             "subject_code": a.subject.code if a.subject else "",
             "division_id": a.division_id,
+            "batch_id": a.batch_id,
             "division_label": a.division.label if a.division else "",
             "batch_label": a.batch.label if a.batch else None,
             "time_start": slot.time_start,
@@ -1019,13 +1051,30 @@ def _get_own_session(db, session_id, teacher_id):
     return session
 
 
+def _student_is_in_session(db, student_user_id: str, session: LectureSession) -> bool:
+    assignment = session.assignment
+    if assignment is None:
+        return False
+    q = select(DivisionStudent).where(
+        and_(
+            DivisionStudent.student_user_id == student_user_id,
+            DivisionStudent.division_id == assignment.division_id,
+        )
+    )
+    if assignment.batch_id is not None:
+        q = q.where(DivisionStudent.batch_id == assignment.batch_id)
+    return db.scalar(q) is not None
+
+
 def _session_out(s: LectureSession) -> SessionOut:
     subject_code = None
     start_student_id = None
     end_student_id = None
     division_id = None
+    batch_id = None
     if s.assignment:
         division_id = s.assignment.division_id
+        batch_id = s.assignment.batch_id
         if s.assignment.subject:
             subject_code = s.assignment.subject.code
         if s.assignment.division:
@@ -1038,7 +1087,8 @@ def _session_out(s: LectureSession) -> SessionOut:
                       attendance_locked=s.attendance_locked or False,
                       start_student_id=start_student_id,
                       end_student_id=end_student_id,
-                      division_id=division_id)
+                      division_id=division_id,
+                      batch_id=batch_id)
 
 
 def _sem_out(s: Semester) -> SemesterOut:

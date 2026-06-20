@@ -26,7 +26,6 @@ const double kPresenceThreshold = 0.75;
 const Duration kTeacherDetectionBatchInterval = Duration(seconds: 30);
 const Duration kTeacherPollInterval = Duration(seconds: 10);
 const Duration kStudentSessionPollInterval = Duration(seconds: 15);
-const int kRssiWindowSize = 8;
 const Duration kProximityDebounceDuration = Duration(seconds: 3);
 const int kManufacturerId = 0x004C;
 const String kDefaultApiBaseUrl = String.fromEnvironment(
@@ -71,7 +70,10 @@ class BleAttendanceApp extends StatelessWidget {
             borderRadius: BorderRadius.circular(12),
             borderSide: const BorderSide(color: Color(0xFF4F46E5), width: 2),
           ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 14,
+          ),
         ),
         cardTheme: CardThemeData(
           elevation: 0,
@@ -83,9 +85,14 @@ class BleAttendanceApp extends StatelessWidget {
         ),
         filledButtonTheme: FilledButtonThemeData(
           style: FilledButton.styleFrom(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
             padding: const EdgeInsets.symmetric(vertical: 14),
-            textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+            textStyle: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
       ),
@@ -190,8 +197,13 @@ class _LoginPageState extends State<LoginPage> {
       if (_role == AppRole.student) {
         final divIds = loginData['division_ids'] as List<dynamic>? ?? [];
         final divIdsStr = divIds.map((e) => e.toString()).join(',');
+        final enrollments = loginData['enrollments'] as List<dynamic>? ?? [];
         const storage = FlutterSecureStorage();
         await storage.write(key: 'student_division_ids', value: divIdsStr);
+        await storage.write(
+          key: 'student_enrollments',
+          value: jsonEncode(enrollments),
+        );
       }
       if (!mounted) return;
       if (_role == AppRole.teacher) {
@@ -205,7 +217,10 @@ class _LoginPageState extends State<LoginPage> {
           final faceProfile = await _api.getFaceProfile();
           const storage = FlutterSecureStorage();
           if (faceProfile != null && faceProfile['embedding'] != null) {
-            await storage.write(key: 'face_embedding', value: jsonEncode(faceProfile['embedding']));
+            await storage.write(
+              key: 'face_embedding',
+              value: jsonEncode(faceProfile['embedding']),
+            );
             await storage.write(key: 'face_registered', value: 'true');
             faceRegistered = true;
           } else {
@@ -217,7 +232,10 @@ class _LoginPageState extends State<LoginPage> {
         }
         if (!mounted) return;
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => StudentPage(api: _api, promptFaceSetup: !faceRegistered)),
+          MaterialPageRoute(
+            builder: (_) =>
+                StudentPage(api: _api, promptFaceSetup: !faceRegistered),
+          ),
         );
       }
     } catch (error) {
@@ -229,8 +247,6 @@ class _LoginPageState extends State<LoginPage> {
       if (mounted) setState(() => _loading = false);
     }
   }
-
-
 
   @override
   Widget build(BuildContext context) {
@@ -246,19 +262,35 @@ class _LoginPageState extends State<LoginPage> {
               children: [
                 // Logo + title
                 Container(
-                  width: 64, height: 64,
+                  width: 64,
+                  height: 64,
                   decoration: BoxDecoration(
                     color: cs.primary,
                     borderRadius: BorderRadius.circular(20),
                   ),
-                  child: const Icon(Icons.school_rounded, color: Colors.white, size: 34),
+                  child: const Icon(
+                    Icons.school_rounded,
+                    color: Colors.white,
+                    size: 34,
+                  ),
                 ),
                 const SizedBox(height: 16),
-                Text('BLE Attendance',
-                    style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: cs.onSurface)),
+                Text(
+                  'BLE Attendance',
+                  style: TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.w800,
+                    color: cs.onSurface,
+                  ),
+                ),
                 const SizedBox(height: 4),
-                Text('Sign in to continue',
-                    style: TextStyle(fontSize: 14, color: cs.onSurface.withAlpha(140))),
+                Text(
+                  'Sign in to continue',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: cs.onSurface.withAlpha(140),
+                  ),
+                ),
                 const SizedBox(height: 32),
 
                 // Card
@@ -266,7 +298,13 @@ class _LoginPageState extends State<LoginPage> {
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(20),
-                    boxShadow: [BoxShadow(color: Colors.black.withAlpha(15), blurRadius: 20, offset: const Offset(0, 4))],
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withAlpha(15),
+                        blurRadius: 20,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
                   ),
                   padding: const EdgeInsets.all(24),
                   child: Column(
@@ -275,17 +313,29 @@ class _LoginPageState extends State<LoginPage> {
                       // Role selector
                       SegmentedButton<AppRole>(
                         segments: const [
-                          ButtonSegment(value: AppRole.student, label: Text('Student'), icon: Icon(Icons.person_outline)),
-                          ButtonSegment(value: AppRole.teacher, label: Text('Teacher'), icon: Icon(Icons.cast_for_education_outlined)),
+                          ButtonSegment(
+                            value: AppRole.student,
+                            label: Text('Student'),
+                            icon: Icon(Icons.person_outline),
+                          ),
+                          ButtonSegment(
+                            value: AppRole.teacher,
+                            label: Text('Teacher'),
+                            icon: Icon(Icons.cast_for_education_outlined),
+                          ),
                         ],
                         selected: {_role},
-                        onSelectionChanged: (set) => setState(() => _role = set.first),
+                        onSelectionChanged: (set) =>
+                            setState(() => _role = set.first),
                       ),
                       const SizedBox(height: 20),
                       if (_isRegister) ...[
                         TextField(
                           controller: _nameCtrl,
-                          decoration: const InputDecoration(labelText: 'Full name', prefixIcon: Icon(Icons.badge_outlined)),
+                          decoration: const InputDecoration(
+                            labelText: 'Full name',
+                            prefixIcon: Icon(Icons.badge_outlined),
+                          ),
                         ),
                         const SizedBox(height: 12),
                       ],
@@ -293,25 +343,39 @@ class _LoginPageState extends State<LoginPage> {
                         controller: _identifierCtrl,
                         textCapitalization: TextCapitalization.characters,
                         decoration: InputDecoration(
-                          labelText: _role == AppRole.teacher ? 'Teacher ID (e.g. T001)' : 'Student ID (e.g. 25CE001)',
+                          labelText: _role == AppRole.teacher
+                              ? 'Teacher ID (e.g. T001)'
+                              : 'Student ID (e.g. 25CE001)',
                           prefixIcon: const Icon(Icons.fingerprint),
                         ),
                       ),
                       const SizedBox(height: 12),
                       TextField(
                         controller: _passwordCtrl,
-                        decoration: const InputDecoration(labelText: 'Password', prefixIcon: Icon(Icons.lock_outline)),
+                        decoration: const InputDecoration(
+                          labelText: 'Password',
+                          prefixIcon: Icon(Icons.lock_outline),
+                        ),
                         obscureText: true,
                       ),
                       const SizedBox(height: 8),
                       // Server URL (collapsed by default)
                       ExpansionTile(
                         tilePadding: EdgeInsets.zero,
-                        title: Text('Server URL', style: TextStyle(fontSize: 13, color: cs.onSurface.withAlpha(160))),
+                        title: Text(
+                          'Server URL',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: cs.onSurface.withAlpha(160),
+                          ),
+                        ),
                         children: [
                           TextField(
                             controller: _serverUrlCtrl,
-                            decoration: const InputDecoration(labelText: 'API base URL', prefixIcon: Icon(Icons.dns_outlined)),
+                            decoration: const InputDecoration(
+                              labelText: 'API base URL',
+                              prefixIcon: Icon(Icons.dns_outlined),
+                            ),
                             keyboardType: TextInputType.url,
                           ),
                           const SizedBox(height: 8),
@@ -321,13 +385,28 @@ class _LoginPageState extends State<LoginPage> {
                       FilledButton(
                         onPressed: _loading || !_ready ? null : _submit,
                         child: _loading
-                            ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                            : Text(_isRegister ? 'Register & Login' : 'Sign In'),
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Text(
+                                _isRegister ? 'Register & Login' : 'Sign In',
+                              ),
                       ),
                       const SizedBox(height: 4),
                       TextButton(
-                        onPressed: _loading ? null : () => setState(() => _isRegister = !_isRegister),
-                        child: Text(_isRegister ? 'Already have an account? Sign in' : 'New user? Register'),
+                        onPressed: _loading
+                            ? null
+                            : () => setState(() => _isRegister = !_isRegister),
+                        child: Text(
+                          _isRegister
+                              ? 'Already have an account? Sign in'
+                              : 'New user? Register',
+                        ),
                       ),
                     ],
                   ),
@@ -359,9 +438,9 @@ class _TeacherPageState extends State<TeacherPage> {
 
   String? _sessionId;
   int? _activeDivisionId;
+  int? _activeBatchId;
   String? _activeDivisionStartStudentId;
   String? _activeDivisionEndStudentId;
-  String? _token;
   bool _loading = false;
   bool _isAdvertising = false;
   bool _finalizationOpen = false;
@@ -428,9 +507,9 @@ class _TeacherPageState extends State<TeacherPage> {
 
   Future<void> _startSession() async {
     if (_selectedSlot == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Select a class first')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Select a class first')));
       return;
     }
     setState(() => _loading = true);
@@ -442,12 +521,16 @@ class _TeacherPageState extends State<TeacherPage> {
       final subjectName = _selectedSlot!['subject_name'] as String;
       final assignmentId = _selectedSlot!['assignment_id'] as int;
       final divisionId = _selectedSlot!['division_id'] as int;
-      final session = await widget.api.startSession(subjectName, assignmentId: assignmentId);
+      final session = await widget.api.startSession(
+        subjectName,
+        assignmentId: assignmentId,
+      );
       _sessionId = session['id'] as String;
       _activeDivisionId = divisionId;
-      _activeDivisionStartStudentId = _selectedSlot!['start_student_id'] as String?;
+      _activeBatchId = _selectedSlot!['batch_id'] as int?;
+      _activeDivisionStartStudentId =
+          _selectedSlot!['start_student_id'] as String?;
       _activeDivisionEndStudentId = _selectedSlot!['end_student_id'] as String?;
-      _token = session['token'] as String;
       _finalizationOpen = (session['finalization_open'] as bool?) ?? false;
 
       _globalTotalHits = 0;
@@ -464,7 +547,9 @@ class _TeacherPageState extends State<TeacherPage> {
       _fetchStudentNames(_sessionId!);
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_friendlyError(error))));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_friendlyError(error))));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -474,7 +559,9 @@ class _TeacherPageState extends State<TeacherPage> {
     _teacherAdvertiseTimer?.cancel();
     await _updateTeacherAdvertisingPayload(subjectName);
 
-    _teacherAdvertiseTimer = Timer.periodic(const Duration(seconds: 4), (_) async {
+    _teacherAdvertiseTimer = Timer.periodic(const Duration(seconds: 4), (
+      _,
+    ) async {
       if (!mounted || !_isAdvertising || _sessionId == null) {
         _teacherAdvertiseTimer?.cancel();
         return;
@@ -491,7 +578,13 @@ class _TeacherPageState extends State<TeacherPage> {
   Future<void> _updateTeacherAdvertisingPayload(String subjectName) async {
     if (_activeDivisionId == null) return;
     try {
-      final payloadBytes = _encodeTeacherPayload(_activeDivisionId!, subjectName, _globalTotalHits, _finalizationOpen);
+      final payloadBytes = _encodeTeacherPayload(
+        _activeDivisionId!,
+        _activeBatchId,
+        subjectName,
+        _globalTotalHits,
+        _finalizationOpen,
+      );
       final data = AdvertiseData(
         serviceUuid: kTeacherServiceUuid,
         includeDeviceName: false,
@@ -507,45 +600,62 @@ class _TeacherPageState extends State<TeacherPage> {
     _scanSub?.cancel();
     _scanCycleTimer?.cancel();
     _isScanning = true;
-    _scanSub = _ble.scanForDevices(
-      withServices: [Uuid.parse(kStudentServiceUuid)],
-      scanMode: ScanMode.lowLatency,
-      requireLocationServicesEnabled: false,
-    ).listen(
-      (device) {
-        final parsed = _extractStudentPayload(device);
-        if (parsed == null || _sessionId == null) return;
-        final studentId = parsed['student_id'] as String;
+    _scanSub = _ble
+        .scanForDevices(
+          withServices: [Uuid.parse(kStudentServiceUuid)],
+          scanMode: ScanMode.lowLatency,
+          requireLocationServicesEnabled: false,
+        )
+        .listen(
+          (device) {
+            final parsed = _extractStudentPayload(device);
+            if (parsed == null || _sessionId == null) return;
+            final studentId = parsed['student_id'] as String;
+            final studentDivisionId = parsed['division_id'] as int?;
+            final studentBatchId = parsed['batch_id'] as int?;
 
-        // Filter out students who are outside of active division range
-        if (_activeDivisionStartStudentId != null && studentId.compareTo(_activeDivisionStartStudentId!) < 0) {
-          return;
-        }
-        if (_activeDivisionEndStudentId != null && studentId.compareTo(_activeDivisionEndStudentId!) > 0) {
-          return;
-        }
+            if (studentDivisionId != _activeDivisionId ||
+                studentBatchId != _activeBatchId) {
+              return;
+            }
 
-        final hits = parsed['hits'] as int;
-        final total = parsed['total'] as int;
-        final verified = parsed['verified'] as bool;
-        final rssi = device.rssi;
-        final ok = rssi > kRssiThreshold;
+            // Filter out students who are outside of active division range
+            if (_activeDivisionStartStudentId != null &&
+                studentId.compareTo(_activeDivisionStartStudentId!) < 0) {
+              return;
+            }
+            if (_activeDivisionEndStudentId != null &&
+                studentId.compareTo(_activeDivisionEndStudentId!) > 0) {
+              return;
+            }
 
-        final tally = _studentTallies.putIfAbsent(
-          studentId, () => _StudentTally(studentId: studentId),
+            final hits = parsed['hits'] as int;
+            final verified = parsed['verified'] as bool;
+            final rssi = device.rssi;
+            final ok = rssi > kRssiThreshold;
+
+            final tally = _studentTallies.putIfAbsent(
+              studentId,
+              () => _StudentTally(studentId: studentId),
+            );
+            // Track the maximum hits ever seen to prevent display fluctuation
+            if (hits > tally.hits) tally.hits = hits;
+            tally.total = _globalTotalHits;
+            tally.latestRssi = rssi;
+            tally.latestAt = DateTime.now();
+            tally.inRange = ok;
+            if (verified) tally.biometricVerified = true;
+            if (mounted) setState(() {});
+          },
+          onError: (_) {
+            if (mounted) setState(() => _isScanning = false);
+            _scheduleStudentScanRetry();
+          },
+          onDone: () {
+            if (mounted) setState(() => _isScanning = false);
+            _scheduleStudentScanRetry();
+          },
         );
-        // Track the maximum hits ever seen to prevent display fluctuation
-        if (hits > tally.hits) tally.hits = hits;
-        tally.total = _globalTotalHits;
-        tally.latestRssi = rssi;
-        tally.latestAt = DateTime.now();
-        tally.inRange = ok;
-        if (verified) tally.biometricVerified = true;
-        if (mounted) setState(() {});
-      },
-      onError: (_) { if (mounted) setState(() => _isScanning = false); _scheduleStudentScanRetry(); },
-      onDone: () { if (mounted) setState(() => _isScanning = false); _scheduleStudentScanRetry(); },
-    );
 
     // Periodically restart the scan every 7 seconds to bypass Android/ColorOS advertisement deduplication
     // (Minimum 6-7 seconds is required to avoid triggering Android's scan throttle: max 5 starts per 30 seconds)
@@ -569,7 +679,8 @@ class _TeacherPageState extends State<TeacherPage> {
   Map<String, dynamic>? _extractStudentPayload(DiscoveredDevice device) {
     if (device.manufacturerData.isEmpty) return null;
     // Ignore teacher beacons (they use a different service UUID)
-    if (device.serviceUuids.isNotEmpty && device.serviceUuids.contains(Uuid.parse(kTeacherServiceUuid))) {
+    if (device.serviceUuids.isNotEmpty &&
+        device.serviceUuids.contains(Uuid.parse(kTeacherServiceUuid))) {
       return null;
     }
     try {
@@ -584,15 +695,35 @@ class _TeacherPageState extends State<TeacherPage> {
       final studentId = parts[0];
       final hits = parts.length > 1 ? int.tryParse(parts[1]) : null;
       final total = parts.length > 2 ? int.tryParse(parts[2]) : null;
-      final verified = parts.length > 3 && parts[3] == 'V';
+      int? divisionId;
+      int? batchId;
+      bool verified = false;
+      if (parts.length > 3) {
+        for (final part in parts.sublist(3)) {
+          if (part == 'V') {
+            verified = true;
+            continue;
+          }
+          final scope = part.split(':');
+          if (scope.length == 2) {
+            divisionId = int.tryParse(scope[0]);
+            final parsedBatchId = int.tryParse(scope[1]);
+            batchId = parsedBatchId == 0 ? null : parsedBatchId;
+          }
+        }
+      }
 
-      if (studentId.length >= 5 && studentId.length <= 12 && RegExp(r'^[A-Z0-9]+$').hasMatch(studentId)) {
+      if (studentId.length >= 5 &&
+          studentId.length <= 12 &&
+          RegExp(r'^[A-Z0-9]+$').hasMatch(studentId)) {
         if (hits != null && total != null) {
           return {
             'student_id': studentId,
             'hits': hits,
             'total': total,
             'verified': verified,
+            'division_id': divisionId,
+            'batch_id': batchId,
           };
         }
       }
@@ -600,12 +731,21 @@ class _TeacherPageState extends State<TeacherPage> {
     return null;
   }
 
-  List<int> _encodeTeacherPayload(int divisionId, String subject, int seq, bool finalizationOpen) {
-    final subjectPart = subject.length > 10 ? subject.substring(0, 10) : subject;
+  List<int> _encodeTeacherPayload(
+    int divisionId,
+    int? batchId,
+    String subject,
+    int seq,
+    bool finalizationOpen,
+  ) {
+    final subjectPart = subject.length > 10
+        ? subject.substring(0, 10)
+        : subject;
     final fFlag = finalizationOpen ? '|F' : '';
-    return utf8.encode('T|$divisionId|$subjectPart|$seq$fFlag');
+    return utf8.encode(
+      'T2|$divisionId|${batchId ?? 0}|$subjectPart|$seq$fFlag',
+    );
   }
-
 
   Future<void> _endSession() async {
     if (!mounted) return;
@@ -614,7 +754,8 @@ class _TeacherPageState extends State<TeacherPage> {
     final unverifiedPresent = _studentTallies.values.where((t) {
       final ratio = _globalTotalHits > 0 ? t.hits / _globalTotalHits : 0.0;
       final isPresent = ratio >= 0.75;
-      final verified = t.biometricVerified || (_verifiedStudents[t.studentId] == true);
+      final verified =
+          t.biometricVerified || (_verifiedStudents[t.studentId] == true);
       return isPresent && !verified;
     }).toList();
 
@@ -646,14 +787,23 @@ class _TeacherPageState extends State<TeacherPage> {
                       final name = _studentNames[t.studentId];
                       return Padding(
                         padding: const EdgeInsets.symmetric(vertical: 3),
-                        child: Row(children: [
-                          const Icon(Icons.warning_amber_rounded, size: 16, color: Colors.orange),
-                          const SizedBox(width: 8),
-                          Text(
-                            '${t.studentId}${name != null ? ' • $name' : ''}',
-                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-                          ),
-                        ]),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.warning_amber_rounded,
+                              size: 16,
+                              color: Colors.orange,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '${t.studentId}${name != null ? ' • $name' : ''}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
                       );
                     }).toList(),
                   ),
@@ -681,7 +831,10 @@ class _TeacherPageState extends State<TeacherPage> {
         context: context,
         barrierDismissible: false,
         builder: (ctx) => AlertDialog(
-          title: const Text('End Session', style: TextStyle(fontWeight: FontWeight.w700)),
+          title: const Text(
+            'End Session',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
           content: const Text('Do you want to end the session?'),
           actions: [
             TextButton(
@@ -704,24 +857,36 @@ class _TeacherPageState extends State<TeacherPage> {
         final active = await widget.api.getActiveSession();
         sessionId = active['id'] as String;
       } catch (_) {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No active session.')));
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('No active session.')));
+        }
         return;
       }
     }
+    final resolvedSessionId = sessionId;
     setState(() => _loading = true);
     try {
-      final decisions = _studentTallies.values.map((t) => {
-        'student_id': t.studentId,
-        'is_present': t.hits > 0 && _globalTotalHits > 0 && (t.hits / _globalTotalHits) >= 0.75,
-        'hits': t.hits,
-        'total': _globalTotalHits,
-      }).toList();
+      final decisions = _studentTallies.values
+          .map(
+            (t) => {
+              'student_id': t.studentId,
+              'is_present':
+                  t.hits > 0 &&
+                  _globalTotalHits > 0 &&
+                  (t.hits / _globalTotalHits) >= 0.75,
+              'hits': t.hits,
+              'total': _globalTotalHits,
+            },
+          )
+          .toList();
 
       if (decisions.isNotEmpty) {
-        await widget.api.batchSubmitAttendance(sessionId!, decisions);
+        await widget.api.batchSubmitAttendance(resolvedSessionId, decisions);
       }
 
-      await widget.api.endSession(sessionId!);
+      await widget.api.endSession(resolvedSessionId);
       _teacherAdvertiseTimer?.cancel();
       await _blePeripheral.stop();
       _scanSub?.cancel();
@@ -732,23 +897,27 @@ class _TeacherPageState extends State<TeacherPage> {
 
       // Refresh summary
       try {
-        final summary = await widget.api.getAttendanceSummary(sessionId!);
+        final summary = await widget.api.getAttendanceSummary(
+          resolvedSessionId,
+        );
         if (mounted) setState(() => _summary = summary);
       } catch (_) {}
 
       if (mounted) {
         setState(() {
           _sessionId = null;
-          _token = null;
           _finalizationOpen = false;
           _activeSubjectName = null;
+          _activeBatchId = null;
           _studentTallies.clear();
           _verifiedStudents.clear();
         });
       }
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_friendlyError(error))));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_friendlyError(error))));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -759,18 +928,18 @@ class _TeacherPageState extends State<TeacherPage> {
       final session = await widget.api.getActiveSession();
       if (!mounted) return;
       final activeId = session['id'] as String;
-      final activeToken = session['token'] as String;
       final activeSubject = (session['subject'] as String?) ?? 'Lecture';
       final activeSubjectCode = session['subject_code'] as String?;
-      final activeFinalization = (session['finalization_open'] as bool?) ?? false;
+      final activeFinalization =
+          (session['finalization_open'] as bool?) ?? false;
 
       setState(() {
         _sessionId = activeId;
-        _token = activeToken;
         _finalizationOpen = activeFinalization;
         _activeSubjectName = activeSubject;
         _activeSubjectCode = activeSubjectCode;
         _activeDivisionId = session['division_id'] as int?;
+        _activeBatchId = session['batch_id'] as int?;
         _activeDivisionStartStudentId = session['start_student_id'] as String?;
         _activeDivisionEndStudentId = session['end_student_id'] as String?;
       });
@@ -829,10 +998,15 @@ class _TeacherPageState extends State<TeacherPage> {
       // Keep advertising — payload now includes |F flag for students to detect finalization via BLE
       final subjectName = _activeSubjectName ?? '';
       await _updateTeacherAdvertisingPayload(subjectName);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Finalization opened for students.')));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Finalization opened for students.')),
+      );
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_friendlyError(error))));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_friendlyError(error))));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -846,7 +1020,8 @@ class _TeacherPageState extends State<TeacherPage> {
     await widget.api.clearSession();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginPage()), (route) => false,
+      MaterialPageRoute(builder: (_) => const LoginPage()),
+      (route) => false,
     );
   }
 
@@ -862,14 +1037,23 @@ class _TeacherPageState extends State<TeacherPage> {
         backgroundColor: cs.primary,
         foregroundColor: Colors.white,
         elevation: 0,
-        title: const Text('Teacher Dashboard', style: TextStyle(fontWeight: FontWeight.w700)),
+        title: const Text(
+          'Teacher Dashboard',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
         actions: [
           IconButton(
-            onPressed: () { _loadTodaySchedule(); if (_sessionId == null) _loadActiveSession(); },
+            onPressed: () {
+              _loadTodaySchedule();
+              if (_sessionId == null) _loadActiveSession();
+            },
             icon: const Icon(Icons.refresh_rounded),
             tooltip: 'Refresh',
           ),
-          IconButton(onPressed: _logout, icon: const Icon(Icons.logout_rounded)),
+          IconButton(
+            onPressed: _logout,
+            icon: const Icon(Icons.logout_rounded),
+          ),
         ],
       ),
       body: Padding(
@@ -879,23 +1063,43 @@ class _TeacherPageState extends State<TeacherPage> {
           children: [
             if (_sessionId == null) ...[
               // ── Class picker ──
-              Text('Select a class to start',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: cs.onSurface.withAlpha(160), letterSpacing: 0.5)),
+              Text(
+                'Select a class to start',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: cs.onSurface.withAlpha(160),
+                  letterSpacing: 0.5,
+                ),
+              ),
               const SizedBox(height: 10),
               if (_todaySlots.isEmpty)
                 Container(
                   padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: const Color(0xFFE8E8E8))),
-                  child: Column(children: [
-                    Icon(Icons.event_busy_rounded, size: 36, color: cs.onSurface.withAlpha(80)),
-                    const SizedBox(height: 8),
-                    Text('No classes scheduled today', style: TextStyle(color: cs.onSurface.withAlpha(140))),
-                  ]),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: const Color(0xFFE8E8E8)),
+                  ),
+                  child: Column(
+                    children: [
+                      Icon(
+                        Icons.event_busy_rounded,
+                        size: 36,
+                        color: cs.onSurface.withAlpha(80),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'No classes scheduled today',
+                        style: TextStyle(color: cs.onSurface.withAlpha(140)),
+                      ),
+                    ],
+                  ),
                 )
               else
                 ...(_todaySlots.map((slot) {
-                  final isSelected = _selectedSlot?['slot_id'] == slot['slot_id'];
+                  final isSelected =
+                      _selectedSlot?['slot_id'] == slot['slot_id'];
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 8),
                     child: InkWell(
@@ -905,36 +1109,75 @@ class _TeacherPageState extends State<TeacherPage> {
                         duration: const Duration(milliseconds: 200),
                         padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
-                          color: isSelected ? cs.primaryContainer : Colors.white,
+                          color: isSelected
+                              ? cs.primaryContainer
+                              : Colors.white,
                           borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: isSelected ? cs.primary : const Color(0xFFE8E8E8), width: isSelected ? 2 : 1),
-                        ),
-                        child: Row(children: [
-                          Container(
-                            width: 42, height: 42,
-                            decoration: BoxDecoration(color: isSelected ? cs.primary : cs.primaryContainer, borderRadius: BorderRadius.circular(10)),
-                            child: Icon(Icons.menu_book_rounded, color: isSelected ? Colors.white : cs.primary, size: 20),
+                          border: Border.all(
+                            color: isSelected
+                                ? cs.primary
+                                : const Color(0xFFE8E8E8),
+                            width: isSelected ? 2 : 1,
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            Text('${slot['subject_name']}', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-                            const SizedBox(height: 2),
-                            Text(
-                              '${slot['division_label']}${slot['batch_label'] != null ? ' · ${slot['batch_label']}' : ''}'
-                              '  ${slot['time_start']}–${slot['time_end']}'
-                              '${slot['room'] != null ? '  · ${slot['room']}' : ''}',
-                              style: TextStyle(fontSize: 12, color: cs.onSurface.withAlpha(160)),
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 42,
+                              height: 42,
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? cs.primary
+                                    : cs.primaryContainer,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Icon(
+                                Icons.menu_book_rounded,
+                                color: isSelected ? Colors.white : cs.primary,
+                                size: 20,
+                              ),
                             ),
-                          ])),
-                          if (isSelected) Icon(Icons.check_circle_rounded, color: cs.primary),
-                        ]),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '${slot['subject_name']}',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 15,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '${slot['division_label']}${slot['batch_label'] != null ? ' · ${slot['batch_label']}' : ''}'
+                                    '  ${slot['time_start']}–${slot['time_end']}'
+                                    '${slot['room'] != null ? '  · ${slot['room']}' : ''}',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: cs.onSurface.withAlpha(160),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (isSelected)
+                              Icon(
+                                Icons.check_circle_rounded,
+                                color: cs.primary,
+                              ),
+                          ],
+                        ),
                       ),
                     ),
                   );
                 })),
               const SizedBox(height: 12),
               FilledButton.icon(
-                onPressed: _loading || _selectedSlot == null ? null : _startSession,
+                onPressed: _loading || _selectedSlot == null
+                    ? null
+                    : _startSession,
                 icon: const Icon(Icons.play_arrow_rounded),
                 label: const Text('Start Session + BLE Broadcast'),
               ),
@@ -943,45 +1186,89 @@ class _TeacherPageState extends State<TeacherPage> {
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(colors: [cs.primary, cs.primary.withAlpha(200)], begin: Alignment.topLeft, end: Alignment.bottomRight),
+                  gradient: LinearGradient(
+                    colors: [cs.primary, cs.primary.withAlpha(200)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
                   borderRadius: BorderRadius.circular(16),
                 ),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(children: [
-                    const Icon(Icons.radio_button_checked, color: Colors.white, size: 16),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Active Session details:',
-                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.radio_button_checked,
+                          color: Colors.white,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Active Session details:',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                'Lecture Subject : ${_activeSubjectName ?? ""}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              Text(
+                                'Subject Code : ${_activeSubjectCode ?? ""}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 2),
-                          Text(
-                            'Lecture Subject : ${_activeSubjectName ?? ""}',
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13),
+                        ),
+                        const SizedBox(width: 8),
+                        if (_summary != null)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withAlpha(50),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              '${_summary!['present_students']}/${_summary!['total_students']} present',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                           ),
-                          Text(
-                            'Subject Code : ${_activeSubjectCode ?? ""}',
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13),
-                          ),
-                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Total hits sent: $_globalTotalHits',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    if (_summary != null)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(color: Colors.white.withAlpha(50), borderRadius: BorderRadius.circular(20)),
-                        child: Text('${_summary!['present_students']}/${_summary!['total_students']} present',
-                            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
-                      ),
-                  ]),
-                  const SizedBox(height: 10),
-                  Text('Total hits sent: $_globalTotalHits', style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
-                ]),
+                  ],
+                ),
               ),
               const SizedBox(height: 10),
               if (!_finalizationOpen)
@@ -1004,94 +1291,195 @@ class _TeacherPageState extends State<TeacherPage> {
                   ),
                 ),
               const SizedBox(height: 14),
-              Row(children: [
-                Text('Detected students', style: TextStyle(fontWeight: FontWeight.w700, color: cs.onSurface)),
-                const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(color: cs.primaryContainer, borderRadius: BorderRadius.circular(20)),
-                  child: Text('${sortedStudents.length}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: cs.primary)),
-                ),
-              ]),
+              Row(
+                children: [
+                  Text(
+                    'Detected students',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: cs.onSurface,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: cs.primaryContainer,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      '${sortedStudents.length}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: cs.primary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
               const SizedBox(height: 8),
               Expanded(
                 child: sortedStudents.isEmpty
-                    ? Center(child: Text('Waiting for students…', style: TextStyle(color: cs.onSurface.withAlpha(120))))
+                    ? Center(
+                        child: Text(
+                          'Waiting for students…',
+                          style: TextStyle(color: cs.onSurface.withAlpha(120)),
+                        ),
+                      )
                     : ListView.separated(
                         itemCount: sortedStudents.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 6),
+                        separatorBuilder: (_, index) =>
+                            const SizedBox(height: 6),
                         itemBuilder: (context, index) {
                           final s = sortedStudents[index];
-                          final ratio = _globalTotalHits > 0 ? s.hits / _globalTotalHits : 0.0;
+                          final ratio = _globalTotalHits > 0
+                              ? s.hits / _globalTotalHits
+                              : 0.0;
                           return Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 10,
+                            ),
                             decoration: BoxDecoration(
                               color: Colors.white,
                               borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: s.inRange ? const Color(0xFFBBF7D0) : const Color(0xFFE8E8E8)),
+                              border: Border.all(
+                                color: s.inRange
+                                    ? const Color(0xFFBBF7D0)
+                                    : const Color(0xFFE8E8E8),
+                              ),
                             ),
-                            child: Row(children: [
-                              Container(
-                                width: 36, height: 36,
-                                decoration: BoxDecoration(
-                                  color: s.inRange ? const Color(0xFFDCFCE7) : const Color(0xFFF5F5F5),
-                                  borderRadius: BorderRadius.circular(10),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 36,
+                                  height: 36,
+                                  decoration: BoxDecoration(
+                                    color: s.inRange
+                                        ? const Color(0xFFDCFCE7)
+                                        : const Color(0xFFF5F5F5),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Icon(
+                                    Icons.person_rounded,
+                                    color: s.inRange
+                                        ? Colors.green.shade700
+                                        : Colors.grey,
+                                    size: 20,
+                                  ),
                                 ),
-                                child: Icon(Icons.person_rounded,
-                                    color: s.inRange ? Colors.green.shade700 : Colors.grey, size: 20),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                Row(children: [
-                                  Text('${s.studentId}${_studentNames[s.studentId] != null ? ' • ${_studentNames[s.studentId]}' : ''}', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
-                                  // Status badge when finalization is open
-                                  if (_finalizationOpen) ...[
-                                    const SizedBox(width: 6),
-                                    Builder(builder: (_) {
-                                      final ratio = _globalTotalHits > 0 ? s.hits / _globalTotalHits : 0.0;
-                                      // Use BLE flag first, fall back to server-polled status
-                                      final bool verified = s.biometricVerified || (_verifiedStudents[s.studentId] == true);
-                                      String label;
-                                      Color textColor;
-                                      Color bgColor;
-                                      Color borderColor;
-                                      if (verified) {
-                                        label = 'Verified';
-                                        textColor = Colors.blue;
-                                        bgColor = Colors.blue.shade50;
-                                        borderColor = Colors.blue.shade200;
-                                      } else if (ratio < 0.75) {
-                                        label = 'Not Eligible';
-                                        textColor = Colors.red;
-                                        bgColor = Colors.red.shade50;
-                                        borderColor = Colors.red.shade200;
-                                      } else {
-                                        label = 'Not verified';
-                                        textColor = Colors.orange;
-                                        bgColor = Colors.orange.shade50;
-                                        borderColor = Colors.orange.shade200;
-                                      }
-                                      return Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                        decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(4), border: Border.all(color: borderColor)),
-                                        child: Text(label, style: TextStyle(fontSize: 10, color: textColor, fontWeight: FontWeight.w600)),
-                                      );
-                                    }),
-                                  ],
-                                ]),
-                                Text('${s.hits}/$_globalTotalHits hits · RSSI ${s.latestRssi ?? '-'} · ${_timeAgo(s.latestAt)}',
-                                    style: TextStyle(fontSize: 11, color: cs.onSurface.withAlpha(140))),
-                              ])),
-                              SizedBox(
-                                width: 36,
-                                child: CircularProgressIndicator(
-                                  value: ratio,
-                                  strokeWidth: 3,
-                                  backgroundColor: const Color(0xFFE8E8E8),
-                                  color: ratio >= 0.75 ? Colors.green : Colors.orange,
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Text(
+                                            '${s.studentId}${_studentNames[s.studentId] != null ? ' • ${_studentNames[s.studentId]}' : ''}',
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.w700,
+                                              fontSize: 14,
+                                            ),
+                                          ),
+                                          // Status badge when finalization is open
+                                          if (_finalizationOpen) ...[
+                                            const SizedBox(width: 6),
+                                            Builder(
+                                              builder: (_) {
+                                                final ratio =
+                                                    _globalTotalHits > 0
+                                                    ? s.hits / _globalTotalHits
+                                                    : 0.0;
+                                                // Use BLE flag first, fall back to server-polled status
+                                                final bool verified =
+                                                    s.biometricVerified ||
+                                                    (_verifiedStudents[s
+                                                            .studentId] ==
+                                                        true);
+                                                String label;
+                                                Color textColor;
+                                                Color bgColor;
+                                                Color borderColor;
+                                                if (verified) {
+                                                  label = 'Verified';
+                                                  textColor = Colors.blue;
+                                                  bgColor = Colors.blue.shade50;
+                                                  borderColor =
+                                                      Colors.blue.shade200;
+                                                } else if (ratio < 0.75) {
+                                                  label = 'Not Eligible';
+                                                  textColor = Colors.red;
+                                                  bgColor = Colors.red.shade50;
+                                                  borderColor =
+                                                      Colors.red.shade200;
+                                                } else {
+                                                  label = 'Not verified';
+                                                  textColor = Colors.orange;
+                                                  bgColor =
+                                                      Colors.orange.shade50;
+                                                  borderColor =
+                                                      Colors.orange.shade200;
+                                                }
+                                                return Container(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 6,
+                                                        vertical: 2,
+                                                      ),
+                                                  decoration: BoxDecoration(
+                                                    color: bgColor,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          4,
+                                                        ),
+                                                    border: Border.all(
+                                                      color: borderColor,
+                                                    ),
+                                                  ),
+                                                  child: Text(
+                                                    label,
+                                                    style: TextStyle(
+                                                      fontSize: 10,
+                                                      color: textColor,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                    ),
+                                                  ),
+                                                );
+                                              },
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                      Text(
+                                        '${s.hits}/$_globalTotalHits hits · RSSI ${s.latestRssi ?? '-'} · ${_timeAgo(s.latestAt)}',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: cs.onSurface.withAlpha(140),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
-                              ),
-                            ]),
+                                SizedBox(
+                                  width: 36,
+                                  child: CircularProgressIndicator(
+                                    value: ratio,
+                                    strokeWidth: 3,
+                                    backgroundColor: const Color(0xFFE8E8E8),
+                                    color: ratio >= 0.75
+                                        ? Colors.green
+                                        : Colors.orange,
+                                  ),
+                                ),
+                              ],
+                            ),
                           );
                         },
                       ),
@@ -1112,25 +1500,6 @@ class _TeacherPageState extends State<TeacherPage> {
   }
 }
 
-class _StatusChip extends StatelessWidget {
-  const _StatusChip({required this.label, required this.active});
-  final String label;
-  final bool active;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: active ? Colors.white.withAlpha(50) : Colors.white.withAlpha(20),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white.withAlpha(80)),
-      ),
-      child: Text(label, style: TextStyle(color: active ? Colors.white : Colors.white.withAlpha(160), fontSize: 11, fontWeight: FontWeight.w600)),
-    );
-  }
-}
-
 class _StudentTally {
   _StudentTally({required this.studentId});
   final String studentId;
@@ -1142,12 +1511,29 @@ class _StudentTally {
   bool biometricVerified = false;
 }
 
+class _EnrollmentScope {
+  const _EnrollmentScope({required this.divisionId, this.batchId});
+
+  final int divisionId;
+  final int? batchId;
+
+  bool matches(int divisionId, int? batchId) {
+    if (this.divisionId != divisionId) return false;
+    if (batchId == null) return true;
+    return this.batchId == batchId;
+  }
+}
+
 // ===========================================================================
 // STUDENT PAGE
 // ===========================================================================
 
 class StudentPage extends StatefulWidget {
-  const StudentPage({super.key, required this.api, this.promptFaceSetup = false});
+  const StudentPage({
+    super.key,
+    required this.api,
+    this.promptFaceSetup = false,
+  });
   final ApiClient api;
   final bool promptFaceSetup;
 
@@ -1164,11 +1550,12 @@ class _StudentPageState extends State<StudentPage> {
 
   String? _sessionId;
   String? _subject;
-  String? _subjectCode;
   String? _teacherName;
   List<int> _studentDivisionIds = [];
+  List<_EnrollmentScope> _studentEnrollments = [];
   String? _studentIdentifier;
-  int? _latestRssi;
+  int? _currentClassDivisionId;
+  int? _currentClassBatchId;
   bool _scanning = false;
   bool _advertising = false;
   bool _finalizationOpen = false;
@@ -1183,18 +1570,15 @@ class _StudentPageState extends State<StudentPage> {
   // Debounced proximity
   bool? _proximityOk;
   bool? _rawProximityOk;
-  DateTime? _rawProximityChangeAt;
   Timer? _proximityDebounceTimer;
-
-  // RSSI sliding window
-  final List<int> _rssiWindow = [];
 
   // Local presence tracking (mirrors teacher-side logic)
   int _totalBeaconReadings = 0;
   int _inRangeHits = 0;
   bool _biometricDone = false;
   bool _faceRegistered = false;
-  double get _hitRatio => _totalBeaconReadings > 0 ? _inRangeHits / _totalBeaconReadings : 0.0;
+  double get _hitRatio =>
+      _totalBeaconReadings > 0 ? _inRangeHits / _totalBeaconReadings : 0.0;
   bool get _meetsThreshold => _hitRatio >= kPresenceThreshold;
 
   @override
@@ -1207,7 +1591,9 @@ class _StudentPageState extends State<StudentPage> {
     _startSessionPolling();
     // Prompt face setup after first frame if no face registered in DB
     if (widget.promptFaceSetup) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _promptFaceSetupIfNeeded());
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _promptFaceSetupIfNeeded(),
+      );
     }
   }
 
@@ -1226,8 +1612,7 @@ class _StudentPageState extends State<StudentPage> {
 
   void _startSessionPolling() {
     _sessionPollTimer?.cancel();
-    _sessionPollTimer =
-        Timer.periodic(kStudentSessionPollInterval, (_) async {
+    _sessionPollTimer = Timer.periodic(kStudentSessionPollInterval, (_) async {
       if (!mounted) return;
       await _loadActiveSession();
     });
@@ -1260,7 +1645,33 @@ class _StudentPageState extends State<StudentPage> {
     const storage = FlutterSecureStorage();
     final idsStr = await storage.read(key: 'student_division_ids');
     if (idsStr != null && idsStr.isNotEmpty) {
-      _studentDivisionIds = idsStr.split(',').map((e) => int.tryParse(e)).whereType<int>().toList();
+      _studentDivisionIds = idsStr
+          .split(',')
+          .map((e) => int.tryParse(e))
+          .whereType<int>()
+          .toList();
+    }
+    final enrollmentsStr = await storage.read(key: 'student_enrollments');
+    if (enrollmentsStr != null && enrollmentsStr.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(enrollmentsStr) as List<dynamic>;
+        _studentEnrollments = decoded
+            .whereType<Map>()
+            .map(
+              (e) => _EnrollmentScope(
+                divisionId: e['division_id'] as int,
+                batchId: e['batch_id'] as int?,
+              ),
+            )
+            .toList();
+      } catch (_) {
+        _studentEnrollments = [];
+      }
+    }
+    if (_studentEnrollments.isEmpty) {
+      _studentEnrollments = _studentDivisionIds
+          .map((divisionId) => _EnrollmentScope(divisionId: divisionId))
+          .toList();
     }
   }
 
@@ -1306,14 +1717,16 @@ class _StudentPageState extends State<StudentPage> {
 
       // If the session changed (teacher ended and started a new one),
       // reset local hit counters so stale data doesn't carry over.
-      if (_sessionId != null && _sessionId != newId && _sessionId != 'ble-detected') {
+      if (_sessionId != null &&
+          _sessionId != newId &&
+          _sessionId != 'ble-detected') {
         _totalBeaconReadings = 0;
         _inRangeHits = 0;
         _biometricDone = false;
-        _rssiWindow.clear();
+        _currentClassDivisionId = null;
+        _currentClassBatchId = null;
         _proximityOk = null;
         _rawProximityOk = null;
-        _latestRssi = null;
         _updateStudentAdvertising();
       }
 
@@ -1321,7 +1734,6 @@ class _StudentPageState extends State<StudentPage> {
       setState(() {
         _sessionId = newId;
         _subject = session['subject'] as String?;
-        _subjectCode = session['subject_code'] as String?;
         _teacherName = session['teacher_name'] as String?;
         _finalizationOpen = isOpen;
         _blePermissionsGranted = true;
@@ -1334,21 +1746,21 @@ class _StudentPageState extends State<StudentPage> {
       // If server returns 404 (no active session), clear local session state
       // so the UI unfreezes (e.g. finalization button won't stay stuck).
       if (e is DioException && e.response?.statusCode == 404) {
-        if ((_sessionId != null || _subject != null || _finalizationOpen) && mounted) {
+        if ((_sessionId != null || _subject != null || _finalizationOpen) &&
+            mounted) {
           _totalBeaconReadings = 0;
           _inRangeHits = 0;
           _biometricDone = false;
-          _rssiWindow.clear();
           _proximityOk = null;
           _rawProximityOk = null;
-          _latestRssi = null;
           _updateStudentAdvertising();
           _serverSaidNoSession = true;
           setState(() {
             _sessionId = null;
             _subject = null;
-            _subjectCode = null;
             _teacherName = null;
+            _currentClassDivisionId = null;
+            _currentClassBatchId = null;
             _finalizationOpen = false;
           });
         }
@@ -1363,8 +1775,13 @@ class _StudentPageState extends State<StudentPage> {
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        title: const Text('Not Eligible', style: TextStyle(fontWeight: FontWeight.w700, color: Colors.red)),
-        content: const Text('You are not eligible for the test because your presence ratio is below 75%.'),
+        title: const Text(
+          'Not Eligible',
+          style: TextStyle(fontWeight: FontWeight.w700, color: Colors.red),
+        ),
+        content: const Text(
+          'You are not eligible for the test because your presence ratio is below 75%.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
@@ -1391,7 +1808,11 @@ class _StudentPageState extends State<StudentPage> {
     if (_studentIdentifier == null) return;
     try {
       final vFlag = _biometricDone ? '|V' : '';
-      final payloadStr = '$_studentIdentifier|$_inRangeHits|$_totalBeaconReadings$vFlag';
+      final scope = _currentClassDivisionId == null
+          ? ''
+          : '|$_currentClassDivisionId:${_currentClassBatchId ?? 0}';
+      final payloadStr =
+          '$_studentIdentifier|$_inRangeHits|$_totalBeaconReadings$scope$vFlag';
       final idBytes = utf8.encode(payloadStr);
       final data = AdvertiseData(
         serviceUuid: kStudentServiceUuid,
@@ -1437,20 +1858,20 @@ class _StudentPageState extends State<StudentPage> {
             final payload = _decodeTeacherPayload(device);
             if (payload != null) {
               final divId = payload['divisionId'] as int?;
-              if (divId == null || !_studentDivisionIds.contains(divId)) {
+              final batchId = payload['batchId'] as int?;
+              if (divId == null ||
+                  !_studentEnrollments.any((e) => e.matches(divId, batchId))) {
                 return; // Ignore neighbor teacher's beacon
+              }
+              final scopeChanged =
+                  _currentClassDivisionId != divId ||
+                  _currentClassBatchId != batchId;
+              if (scopeChanged) {
+                _currentClassDivisionId = divId;
+                _currentClassBatchId = batchId;
               }
 
               final rssi = device.rssi;
-              _rssiWindow.add(rssi);
-              if (_rssiWindow.length > kRssiWindowSize) {
-                _rssiWindow.removeAt(0);
-              }
-              final avgRssi = _rssiWindow.isEmpty
-                  ? rssi
-                  : (_rssiWindow.reduce((a, b) => a + b) / _rssiWindow.length)
-                        .round();
-              // Use raw RSSI instead of average for tracking hits to match teacher's calculation
               final ok = rssi > kRssiThreshold;
 
               // Track presence hits for threshold check using sequence numbers.
@@ -1469,6 +1890,8 @@ class _StudentPageState extends State<StudentPage> {
                     _inRangeHits++;
                   }
                   _updateStudentAdvertising();
+                } else if (scopeChanged) {
+                  _updateStudentAdvertising();
                 }
               }
 
@@ -1476,13 +1899,13 @@ class _StudentPageState extends State<StudentPage> {
               _updateDebouncedProximity(ok);
 
               // Detect finalization via BLE (works even without internet)
-              final bleFinalization = payload['finalizationOpen'] as bool? ?? false;
+              final bleFinalization =
+                  payload['finalizationOpen'] as bool? ?? false;
               if (bleFinalization && !_finalizationOpen) {
                 _finalizationOpen = true;
               }
 
               setState(() {
-                _latestRssi = avgRssi;
                 // Only use BLE-detected session if the server hasn't
                 // explicitly said there's no session for this student.
                 if (!_serverSaidNoSession) {
@@ -1541,7 +1964,8 @@ class _StudentPageState extends State<StudentPage> {
 
   Map<String, dynamic>? _decodeTeacherPayload(DiscoveredDevice device) {
     if (device.manufacturerData.isEmpty) return null;
-    if (device.serviceUuids.isNotEmpty && !device.serviceUuids.contains(Uuid.parse(kTeacherServiceUuid))) {
+    if (device.serviceUuids.isNotEmpty &&
+        !device.serviceUuids.contains(Uuid.parse(kTeacherServiceUuid))) {
       return null;
     }
     try {
@@ -1551,20 +1975,36 @@ class _StudentPageState extends State<StudentPage> {
       final payload = utf8.decode(bytes.sublist(2));
       if (!payload.contains('|')) return null;
       final parts = payload.split('|');
-      if (parts.length < 4 || parts[0] != 'T') return null;
+      if (parts.length < 4) return null;
+      final isV2 = parts[0] == 'T2';
+      if (!isV2 && parts[0] != 'T') return null;
 
       final divisionId = int.tryParse(parts[1]);
-      final subject = parts.length > 2 ? parts[2].trim() : null;
-      final seqStr = parts.length > 3 ? parts[3].trim() : null;
+      final batchId = isV2 ? int.tryParse(parts[2]) : null;
+      final subjectIndex = isV2 ? 3 : 2;
+      final seqIndex = isV2 ? 4 : 3;
+      final subject = parts.length > subjectIndex
+          ? parts[subjectIndex].trim()
+          : null;
+      final seqStr = parts.length > seqIndex ? parts[seqIndex].trim() : null;
       final seq = seqStr != null ? int.tryParse(seqStr) : null;
-      final finalizationOpen = parts.length > 4 && parts[4].trim() == 'F';
+      final finalizationOpen =
+          parts.length > seqIndex + 1 && parts[seqIndex + 1].trim() == 'F';
 
       if (divisionId == null) return null;
-      if (subject != null && (subject.isEmpty || RegExp(r'[\x00-\x1F]').hasMatch(subject))) {
-        return {'divisionId': divisionId, 'subject': null, 'seq': seq, 'finalizationOpen': finalizationOpen};
+      if (subject != null &&
+          (subject.isEmpty || RegExp(r'[\x00-\x1F]').hasMatch(subject))) {
+        return {
+          'divisionId': divisionId,
+          'batchId': batchId == 0 ? null : batchId,
+          'subject': null,
+          'seq': seq,
+          'finalizationOpen': finalizationOpen,
+        };
       }
       return {
         'divisionId': divisionId,
+        'batchId': batchId == 0 ? null : batchId,
         'subject': subject,
         'seq': seq,
         'finalizationOpen': finalizationOpen,
@@ -1587,15 +2027,24 @@ class _StudentPageState extends State<StudentPage> {
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        title: const Text('Set Up Face ID', style: TextStyle(fontWeight: FontWeight.w700)),
+        title: const Text(
+          'Set Up Face ID',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
         content: const Text(
           'You don\'t have a face profile registered yet.\n\n'
           'Face verification is required to finalize attendance. '
           'Set it up now so you\'re ready when class starts.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Later')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Set Up Now')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Later'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Set Up Now'),
+          ),
         ],
       ),
     );
@@ -1618,19 +2067,23 @@ class _StudentPageState extends State<StudentPage> {
     if (!camStatus.isGranted) {
       if (!mounted) return false;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Camera permission is required for face verification.')),
+        const SnackBar(
+          content: Text('Camera permission is required for face verification.'),
+        ),
       );
       return false;
     }
 
     if (!mounted) return false;
     final registered = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => FaceRegistrationPage(
-        onUpload: (embedding) async {
-          await widget.api.registerFace(embedding);
-          return true;
-        },
-      )),
+      MaterialPageRoute(
+        builder: (_) => FaceRegistrationPage(
+          onUpload: (embedding) async {
+            await widget.api.registerFace(embedding);
+            return true;
+          },
+        ),
+      ),
     );
     if (registered == true && mounted) {
       setState(() => _faceRegistered = true);
@@ -1700,12 +2153,14 @@ class _StudentPageState extends State<StudentPage> {
 
     if (!mounted) return;
     final registered = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => FaceRegistrationPage(
-        onUpload: (embedding) async {
-          await widget.api.reRegisterFace(embedding);
-          return true;
-        },
-      )),
+      MaterialPageRoute(
+        builder: (_) => FaceRegistrationPage(
+          onUpload: (embedding) async {
+            await widget.api.reRegisterFace(embedding);
+            return true;
+          },
+        ),
+      ),
     );
     if (registered == true && mounted) {
       setState(() => _faceRegistered = true);
@@ -1738,23 +2193,50 @@ class _StudentPageState extends State<StudentPage> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) => AlertDialog(
-          title: const Text('Change Password', style: TextStyle(fontWeight: FontWeight.w700)),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            TextField(controller: oldCtrl, obscureText: true,
-                decoration: const InputDecoration(labelText: 'Current password')),
-            const SizedBox(height: 12),
-            TextField(controller: newCtrl, obscureText: true,
-                decoration: const InputDecoration(labelText: 'New password (min 6 chars)')),
-            const SizedBox(height: 12),
-            TextField(controller: confirmCtrl, obscureText: true,
-                decoration: const InputDecoration(labelText: 'Confirm new password')),
-            if (error != null) ...[
-              const SizedBox(height: 10),
-              Text(error!, style: const TextStyle(color: Colors.red, fontSize: 13)),
+          title: const Text(
+            'Change Password',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: oldCtrl,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: 'Current password',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: newCtrl,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: 'New password (min 6 chars)',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: confirmCtrl,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: 'Confirm new password',
+                ),
+              ),
+              if (error != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  error!,
+                  style: const TextStyle(color: Colors.red, fontSize: 13),
+                ),
+              ],
             ],
-          ]),
+          ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
             FilledButton(
               onPressed: () async {
                 if (newCtrl.text != confirmCtrl.text) {
@@ -1762,7 +2244,9 @@ class _StudentPageState extends State<StudentPage> {
                   return;
                 }
                 if (newCtrl.text.length < 6) {
-                  setS(() => error = 'New password must be at least 6 characters');
+                  setS(
+                    () => error = 'New password must be at least 6 characters',
+                  );
                   return;
                 }
                 try {
@@ -1770,7 +2254,9 @@ class _StudentPageState extends State<StudentPage> {
                   if (ctx.mounted) Navigator.pop(ctx);
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Password changed successfully')),
+                      const SnackBar(
+                        content: Text('Password changed successfully'),
+                      ),
                     );
                   }
                 } catch (e) {
@@ -1788,12 +2274,6 @@ class _StudentPageState extends State<StudentPage> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final proximityColor = _proximityOk == null
-        ? Colors.grey
-        : (_proximityOk! ? const Color(0xFF16A34A) : const Color(0xFFDC2626));
-    final proximityBg = _proximityOk == null
-        ? const Color(0xFFF5F5F5)
-        : (_proximityOk! ? const Color(0xFFDCFCE7) : const Color(0xFFFEE2E2));
     final proximityText = _proximityOk == null
         ? 'Searching for teacher…'
         : (_proximityOk! ? 'In Range' : 'Out of Range');
@@ -1807,21 +2287,40 @@ class _StudentPageState extends State<StudentPage> {
         backgroundColor: cs.primary,
         foregroundColor: Colors.white,
         elevation: 0,
-        title: const Text('Student Dashboard', style: TextStyle(fontWeight: FontWeight.w700)),
+        title: const Text(
+          'Student Dashboard',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
         actions: [
-          IconButton(onPressed: _loadActiveSession, icon: const Icon(Icons.refresh_rounded), tooltip: 'Refresh'),
+          IconButton(
+            onPressed: _loadActiveSession,
+            icon: const Icon(Icons.refresh_rounded),
+            tooltip: 'Refresh',
+          ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert_rounded),
             onSelected: (value) {
               switch (value) {
-                case 'password': _showChangePasswordDialog(); break;
-                case 'reregister': _reRegisterFace(); break;
-                case 'logout': _logout(); break;
+                case 'password':
+                  _showChangePasswordDialog();
+                  break;
+                case 'reregister':
+                  _reRegisterFace();
+                  break;
+                case 'logout':
+                  _logout();
+                  break;
               }
             },
             itemBuilder: (_) => [
-              const PopupMenuItem(value: 'password', child: Text('Change Password')),
-              const PopupMenuItem(value: 'reregister', child: Text('Re-register Face')),
+              const PopupMenuItem(
+                value: 'password',
+                child: Text('Change Password'),
+              ),
+              const PopupMenuItem(
+                value: 'reregister',
+                child: Text('Re-register Face'),
+              ),
               const PopupMenuItem(value: 'logout', child: Text('Logout')),
             ],
           ),
@@ -1836,26 +2335,64 @@ class _StudentPageState extends State<StudentPage> {
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: _subject != null ? cs.primaryContainer : const Color(0xFFF5F5F5),
+                color: _subject != null
+                    ? cs.primaryContainer
+                    : const Color(0xFFF5F5F5),
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: _subject != null ? cs.primary.withAlpha(60) : const Color(0xFFE8E8E8)),
-              ),
-              child: Row(children: [
-                Container(
-                  width: 44, height: 44,
-                  decoration: BoxDecoration(color: _subject != null ? cs.primary : Colors.grey.shade300, borderRadius: BorderRadius.circular(12)),
-                  child: Icon(Icons.menu_book_rounded, color: _subject != null ? Colors.white : Colors.grey, size: 22),
+                border: Border.all(
+                  color: _subject != null
+                      ? cs.primary.withAlpha(60)
+                      : const Color(0xFFE8E8E8),
                 ),
-                const SizedBox(width: 12),
-                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(_subject ?? 'No Active Lecture',
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: cs.onSurface.withAlpha(200), letterSpacing: 0.2)),
-                  if (_subject != null && _teacherName != null && _teacherName!.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Text('Teacher: $_teacherName', style: TextStyle(fontSize: 13, color: cs.onSurface.withAlpha(160))),
-                  ],
-                ])),
-              ]),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: _subject != null
+                          ? cs.primary
+                          : Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(
+                      Icons.menu_book_rounded,
+                      color: _subject != null ? Colors.white : Colors.grey,
+                      size: 22,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _subject ?? 'No Active Lecture',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: cs.onSurface.withAlpha(200),
+                            letterSpacing: 0.2,
+                          ),
+                        ),
+                        if (_subject != null &&
+                            _teacherName != null &&
+                            _teacherName!.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Teacher: $_teacherName',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: cs.onSurface.withAlpha(160),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
 
             const SizedBox(height: 16),
@@ -1865,29 +2402,64 @@ class _StudentPageState extends State<StudentPage> {
             // Status info card
             Container(
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: const Color(0xFFE8E8E8))),
-              child: Column(children: [
-                _StatusRow(icon: proximityIcon, label: 'STATUS', value: proximityText, active: _proximityOk ?? false),
-                const Divider(height: 16),
-                _StatusRow(icon: Icons.bluetooth_searching_rounded, label: 'BLE Scan', value: _scanning ? 'Active' : 'Off', active: _scanning),
-                const Divider(height: 16),
-                _StatusRow(icon: Icons.broadcast_on_personal_rounded, label: 'Student ID', value: _advertising ? (_studentIdentifier ?? 'On') : 'Off', active: _advertising),
-                const Divider(height: 16),
-                _StatusRow(icon: Icons.how_to_reg_rounded, label: 'Finalization',
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFFE8E8E8)),
+              ),
+              child: Column(
+                children: [
+                  _StatusRow(
+                    icon: proximityIcon,
+                    label: 'STATUS',
+                    value: proximityText,
+                    active: _proximityOk ?? false,
+                  ),
+                  const Divider(height: 16),
+                  _StatusRow(
+                    icon: Icons.bluetooth_searching_rounded,
+                    label: 'BLE Scan',
+                    value: _scanning ? 'Active' : 'Off',
+                    active: _scanning,
+                  ),
+                  const Divider(height: 16),
+                  _StatusRow(
+                    icon: Icons.broadcast_on_personal_rounded,
+                    label: 'Student ID',
+                    value: _advertising ? (_studentIdentifier ?? 'On') : 'Off',
+                    active: _advertising,
+                  ),
+                  const Divider(height: 16),
+                  _StatusRow(
+                    icon: Icons.how_to_reg_rounded,
+                    label: 'Finalization',
                     value: _finalizationOpen
                         ? 'Open — tap button below'
                         : 'Waiting for teacher',
-                    active: _finalizationOpen),
-                if (_scanError != null) ...[
-                  const Divider(height: 16),
-                  _StatusRow(icon: Icons.warning_amber_rounded, label: 'Status', value: _scanError!, active: false, isWarning: true),
+                    active: _finalizationOpen,
+                  ),
+                  if (_scanError != null) ...[
+                    const Divider(height: 16),
+                    _StatusRow(
+                      icon: Icons.warning_amber_rounded,
+                      label: 'Status',
+                      value: _scanError!,
+                      active: false,
+                      isWarning: true,
+                    ),
+                  ],
+                  if (!_blePermissionsGranted) ...[
+                    const Divider(height: 16),
+                    _StatusRow(
+                      icon: Icons.block_rounded,
+                      label: 'Permission',
+                      value: 'Nearby devices denied',
+                      active: false,
+                      isWarning: true,
+                    ),
+                  ],
                 ],
-                if (!_blePermissionsGranted) ...[
-                  const Divider(height: 16),
-                  _StatusRow(icon: Icons.block_rounded, label: 'Permission', value: 'Nearby devices denied', active: false, isWarning: true),
-                ],
-              ]),
+              ),
             ),
 
             const SizedBox(height: 16),
@@ -1903,15 +2475,26 @@ class _StudentPageState extends State<StudentPage> {
                       }
                     }
                   : null,
-              icon: Icon(_biometricDone ? Icons.check_circle_rounded : Icons.face_rounded),
-              label: Text(_biometricDone ? 'Attendance Verified ✅' : 'Finalize Attendance (Face Scan)'),
+              icon: Icon(
+                _biometricDone
+                    ? Icons.check_circle_rounded
+                    : Icons.face_rounded,
+              ),
+              label: Text(
+                _biometricDone
+                    ? 'Attendance Verified ✅'
+                    : 'Finalize Attendance (Face Scan)',
+              ),
             ),
 
             if (Platform.isAndroid) ...[
               const SizedBox(height: 10),
               OutlinedButton.icon(
                 onPressed: () async {
-                  const intent = AndroidIntent(action: 'android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS');
+                  const intent = AndroidIntent(
+                    action:
+                        'android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS',
+                  );
                   await intent.launch();
                 },
                 icon: const Icon(Icons.battery_saver_outlined),
@@ -1957,7 +2540,13 @@ class _StudentPageState extends State<StudentPage> {
 }
 
 class _StatusRow extends StatelessWidget {
-  const _StatusRow({required this.icon, required this.label, required this.value, required this.active, this.isWarning = false});
+  const _StatusRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.active,
+    this.isWarning = false,
+  });
   final IconData icon;
   final String label;
   final String value;
@@ -1966,14 +2555,28 @@ class _StatusRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = isWarning ? Colors.orange : (active ? const Color(0xFF16A34A) : Colors.grey);
-    return Row(children: [
-      Icon(icon, size: 18, color: color),
-      const SizedBox(width: 10),
-      Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-      const Spacer(),
-      Text(value, style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w500)),
-    ]);
+    final color = isWarning
+        ? Colors.orange
+        : (active ? const Color(0xFF16A34A) : Colors.grey);
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: color),
+        const SizedBox(width: 10),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+        ),
+        const Spacer(),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 12,
+            color: color,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -2032,6 +2635,8 @@ class ApiClient {
     await _storage.delete(key: 'token');
     await _storage.delete(key: 'role');
     await _storage.delete(key: 'identifier');
+    await _storage.delete(key: 'student_division_ids');
+    await _storage.delete(key: 'student_enrollments');
   }
 
   Future<void> enablePersistentConnection() async {
@@ -2048,15 +2653,6 @@ class ApiClient {
       options: Options(headers: {'Authorization': 'Bearer $token'}),
     );
     return Map<String, dynamic>.from(response.data as Map);
-  }
-
-  Future<List<dynamic>> _authedGetList(String path) async {
-    final token = await _token();
-    final response = await _dio.get(
-      path,
-      options: Options(headers: {'Authorization': 'Bearer $token'}),
-    );
-    return List<dynamic>.from(response.data as List);
   }
 
   Future<Map<String, dynamic>> _authedPost(
@@ -2102,11 +2698,13 @@ class ApiClient {
   }
 
   // Sessions
-  Future<Map<String, dynamic>> startSession(String subject, {int? assignmentId}) =>
-      _authedPost('/sessions', {
-        'subject': subject,
-        if (assignmentId != null) 'assignment_id': assignmentId,
-      });
+  Future<Map<String, dynamic>> startSession(
+    String subject, {
+    int? assignmentId,
+  }) => _authedPost('/sessions', {
+    'subject': subject,
+    'assignment_id': ?assignmentId,
+  });
 
   Future<Map<String, dynamic>> endSession(String sessionId) =>
       _authedPost('/sessions/$sessionId/end', {});
@@ -2124,7 +2722,9 @@ class ApiClient {
       '/teacher/me/schedule/today/slots',
       options: Options(headers: {'Authorization': 'Bearer $token'}),
     );
-    return (response.data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    return (response.data as List)
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
   }
 
   // Batch submit final P/A at session end (replaces per-detection pings)
@@ -2151,11 +2751,13 @@ class ApiClient {
   Future<Map<String, dynamic>> getAttendanceSummary(String sessionId) =>
       _authedGet('/teacher/sessions/$sessionId/attendance-summary');
 
-  Future<Map<String, dynamic>> changePassword(String oldPassword, String newPassword) =>
-      _authedPost('/auth/change-password', {
-        'old_password': oldPassword,
-        'new_password': newPassword,
-      });
+  Future<Map<String, dynamic>> changePassword(
+    String oldPassword,
+    String newPassword,
+  ) => _authedPost('/auth/change-password', {
+    'old_password': oldPassword,
+    'new_password': newPassword,
+  });
 
   // Face profile
   Future<Map<String, dynamic>> registerFace(List<double> embedding) =>

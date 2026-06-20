@@ -89,7 +89,7 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
       if (decoded is List) {
         if (decoded.isNotEmpty) {
           if (decoded[0] is List) {
-            embeddingsList = (decoded as List)
+            embeddingsList = decoded
                 .map((item) => List<double>.from(item as List))
                 .toList();
           } else {
@@ -224,10 +224,10 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
       }
 
       final embedding = _recognizer.getEmbedding(cropped);
-      
+
       bool match = false;
       double bestDist = 999.0;
-      
+
       if (_savedEmbeddings != null) {
         for (final saved in _savedEmbeddings!) {
           final dist = _recognizer.distance(embedding, saved);
@@ -423,8 +423,12 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
                   onPressed: _processing ? null : _captureAndVerify,
                   icon: _processing
                       ? const SizedBox(
-                          width: 20, height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
                         )
                       : const Icon(Icons.face_rounded),
                   label: Text(_processing ? 'Verifying…' : 'Scan Face'),

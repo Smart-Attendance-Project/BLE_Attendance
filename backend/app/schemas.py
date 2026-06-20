@@ -20,13 +20,19 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class StudentEnrollmentOut(BaseModel):
+    division_id: int
+    batch_id: Optional[int] = None
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     role: UserRole
     full_name: str
     user_id: str
-    division_ids: list[int] = []
+    division_ids: list[int] = Field(default_factory=list)
+    enrollments: list[StudentEnrollmentOut] = Field(default_factory=list)
 
 
 class UserOut(BaseModel):
@@ -61,6 +67,7 @@ class SessionOut(BaseModel):
     start_student_id: Optional[str] = None
     end_student_id: Optional[str] = None
     division_id: Optional[int] = None
+    batch_id: Optional[int] = None
 
 
 # ── Detection ─────────────────────────────────────────────────────────────────
