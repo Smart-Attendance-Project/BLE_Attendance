@@ -21,13 +21,22 @@ import 'face_verification_dialog.dart';
 
 const String kTeacherServiceUuid = '0000180D-0000-1000-8000-00805F9B34FB';
 const String kStudentServiceUuid = '0000181C-0000-1000-8000-00805F9B34FB';
-const int kRssiThreshold = -88;
+const int kRssiThreshold = -95;
 const double kPresenceThreshold = 0.75;
 const Duration kTeacherDetectionBatchInterval = Duration(seconds: 30);
 const Duration kTeacherPollInterval = Duration(seconds: 10);
 const Duration kStudentSessionPollInterval = Duration(seconds: 15);
 const Duration kProximityDebounceDuration = Duration(seconds: 3);
 const int kManufacturerId = 0x004C;
+
+/// Max-range BLE advertising settings (Android).
+/// Uses highest TX power and low-latency mode for ~10 m+ visibility.
+final AdvertiseSettings kMaxRangeAdvertiseSettings = AdvertiseSettings(
+  advertiseMode: AdvertiseMode.advertiseModeLowLatency,
+  txPowerLevel: AdvertiseTxPower.advertiseTxPowerHigh,
+  connectable: false,
+  timeout: 0,
+);
 const String kDefaultApiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
   defaultValue: 'https://ble-attendance.onrender.com',
@@ -592,7 +601,10 @@ class _TeacherPageState extends State<TeacherPage> {
         manufacturerData: Uint8List.fromList(payloadBytes),
       );
       await _blePeripheral.stop();
-      await _blePeripheral.start(advertiseData: data);
+      await _blePeripheral.start(
+        advertiseData: data,
+        advertiseSettings: kMaxRangeAdvertiseSettings,
+      );
     } catch (_) {}
   }
 
@@ -1821,7 +1833,10 @@ class _StudentPageState extends State<StudentPage> {
         manufacturerData: Uint8List.fromList(idBytes),
       );
       await _blePeripheral.stop();
-      await _blePeripheral.start(advertiseData: data);
+      await _blePeripheral.start(
+        advertiseData: data,
+        advertiseSettings: kMaxRangeAdvertiseSettings,
+      );
     } catch (_) {}
   }
 
