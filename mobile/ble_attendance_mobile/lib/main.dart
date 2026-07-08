@@ -21,7 +21,7 @@ import 'face_verification_dialog.dart';
 
 const String kTeacherServiceUuid = '0000180D-0000-1000-8000-00805F9B34FB';
 const String kStudentServiceUuid = '0000181C-0000-1000-8000-00805F9B34FB';
-const int kRssiThreshold = -95;
+const int kRssiThreshold = -150;
 const double kPresenceThreshold = 0.75;
 const Duration kTeacherDetectionBatchInterval = Duration(seconds: 30);
 const Duration kTeacherPollInterval = Duration(seconds: 10);
