@@ -6,6 +6,7 @@ on:
       - main 
       - Kushagra
       - MOKSH # change to your default branch if different
+      - BLE_load_test
   workflow_dispatch:  # lets you trigger manually from the Actions tab
 
 # Prevent concurrent builds on the same branch (e.g. rapid pushes)
