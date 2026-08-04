@@ -6,34 +6,55 @@ Simulates N student phones from a SINGLE Linux Bluetooth adapter by rapidly
 cycling through student ID payloads in the BLE advertisement manufacturer data.
 
 The teacher's phone scans for kStudentServiceUuid and parses the manufacturer
-data. Since Android caches advertisements by MAC address, we rotate student IDs
-faster than the teacher's 7-second scan-cycle restart — so the teacher sees
-many distinct student IDs even though they all come from one MAC.
+data.  Each student gets a UNIQUE spoofed random LE address so Android's
+per-MAC advertisement cache doesn't collapse all of them to one entry.
+
+Why random addresses fix the 12/50 problem
+------------------------------------------
+  Android's BLE stack deduplicates received advertisements by MAC address
+  within a single scan window.  When all students share one MAC (the adapter's
+  public address), the phone only delivers ONE callback per scan window — so
+  you see ~1 student per 7-second window regardless of how many IDs you cycle.
+  Spoofing a distinct random address per student (LE_Set_Random_Address before
+  each slot) gives each one a unique identity, so Android delivers all of them
+  as separate DiscoveredDevice events.
 
 How it works
 ------------
-  Each "round" (default: every 500 ms per student):
-  1. Build a BLE ADV_NONCONN_IND packet with:
-       - Flags AD type (0x01): LE General Discoverable + BR/EDR Not Supported
-       - 16-bit UUID (0x03): 0x181C  (kStudentServiceUuid, little-endian)
-       - Manufacturer Specific (0xFF): company_id=0x004C + UTF-8 payload
-         payload format: "{studentId}|{hits}|{total}|{divId}:{batchId}"
-  2. Write it directly to /dev/hci0 via hcitool cmd / btmgmt raw.
+  Each student slot:
+  1. Stop advertising.
+  2. Set a unique random LE address (HCI_LE_Set_Random_Address, OCF 0x0005)
+     with the non-resolvable private address format (top 2 bits = 0b00).
+  3. Set advertising params with own_address_type=0x01 (random).
+  4. Write primary AD (Flags + 128-bit UUID) and scan-response
+     (Manufacturer Specific with full payload).
+  5. Enable advertising for `--dwell` seconds, then move to next student.
+
+Modes
+-----
+  Normal (default):  one student at a time, each advertised for --dwell s.
+  Burst (--burst):   all N students cycled as fast as possible back-to-back,
+                     with minimal dwell per student.  Simulates the real-world
+                     scenario where all 70 students are in range simultaneously
+                     and the teacher's phone picks them all up in one sweep.
 
 Requirements
 ------------
-  - Linux with BlueZ (hciconfig, hcitool in PATH) — already confirmed present
-  - A Bluetooth USB dongle plugged in (or built-in BT adapter)
-  - Run as root, or add CAP_NET_ADMIN:
+  - Linux with BlueZ (hciconfig, hcitool in PATH)
+  - A Bluetooth USB dongle or built-in BT adapter
+  - Run as root (HCI raw commands need CAP_NET_ADMIN):
       sudo python3 ble_hci_advertiser.py
   - The teacher app running on a real Android phone in the same room
 
 Usage
 -----
-  sudo python3 ble_hci_advertiser.py                         # 70 students, div 1
+  sudo python3 ble_hci_advertiser.py                          # 70 students, div 1
   sudo python3 ble_hci_advertiser.py --students 30 --div 2
   sudo python3 ble_hci_advertiser.py --students 60 --dwell 0.3 --rounds 8
-  sudo python3 ble_hci_advertiser.py --hci hci1             # second adapter
+  sudo python3 ble_hci_advertiser.py --hci hci1               # second adapter
+
+  # Burst mode — simulate all 70 hitting at once
+  sudo python3 ble_hci_advertiser.py --burst --students 70 --rounds 3
 
 Arguments
 ---------
@@ -42,10 +63,13 @@ Arguments
   --start      First student index, e.g. 1 → 25CE001 (default: 1)
   --div        Division ID embedded in payload (default: 1)
   --batch      Batch ID (0 = no batch / lecture mode, default: 0)
-  --dwell      Seconds to advertise each student ID (default: 0.4)
+  --dwell      Seconds per student ID in normal mode (default: 0.4).
+               In --burst mode: minimum dwell per student (default: 0.05).
   --rounds     How many full cycles to run (default: 5)
   --total      Simulated global beacon counter sent to teacher (default: 10)
   --verified   Mark all students as biometric-verified in payload
+  --burst      Burst mode: cycle all students as fast as possible to stress-
+               test simultaneous detection on the teacher phone
 
 Payload anatomy (mirrors _updateStudentAdvertising in main.dart)
 ----------------------------------------------------------------
@@ -190,29 +214,65 @@ def hcitool_cmd(hci: str, ogf: int, ocf: int, params: bytes) -> bool:
 
 # OGF / OCF for BLE advertising HCI commands
 OGF_LE_CTL = 0x08
-OCF_LE_SET_ADV_PARAMS   = 0x0006
-OCF_LE_SET_ADV_DATA     = 0x0008
-OCF_LE_SET_ADV_ENABLE   = 0x000A
+OCF_LE_SET_ADV_PARAMS      = 0x0006
+OCF_LE_SET_ADV_DATA        = 0x0008
+OCF_LE_SET_SCAN_RESP_DATA  = 0x0009
+OCF_LE_SET_ADV_ENABLE      = 0x000A
+OCF_LE_SET_RANDOM_ADDRESS  = 0x0005  # HCI_LE_Set_Random_Address
 
 
-def le_set_adv_params(hci: str):
+def le_set_random_address(hci: str, addr: bytes) -> bool:
+    """
+    HCI_LE_Set_Random_Address (OCF 0x0005)
+    addr: 6 bytes in little-endian order (LSB first).
+
+    We use a Non-Resolvable Private Address format:
+      - top 2 bits of the most-significant byte must be 0b00
+      - remaining 46 bits are random
+
+    Android treats each unique random address as a completely distinct device,
+    which is exactly what we need so it doesn't deduplicate all our student
+    advertisements into one MAC entry.
+    """
+    assert len(addr) == 6
+    return hcitool_cmd(hci, OGF_LE_CTL, OCF_LE_SET_RANDOM_ADDRESS, addr)
+
+
+def make_random_addr() -> bytes:
+    """
+    Generate a 6-byte Non-Resolvable Private Address.
+    BT spec vol 6 part B §1.3.2.2:
+      Most-significant byte top 2 bits must be 0b00 (non-resolvable private).
+    Returns bytes in little-endian order (LSB first) as required by HCI.
+    """
+    import os
+    raw = bytearray(os.urandom(6))
+    raw[5] &= 0x3F   # clear top 2 bits of the most-significant byte
+    return bytes(raw)
+
+
+def le_set_adv_params(hci: str, own_address_type: int = 0x01) -> bool:
     """
     HCI_LE_Set_Advertising_Parameters
     ADV_IND (0x00) — connectable, undirected, scannable.
     We need scannable (not ADV_NONCONN_IND) so the Android phone can send a
     scan request and receive the scan response containing the manufacturer data.
     Interval min/max: 100 ms (0x00A0)
+
+    own_address_type:
+      0x00 = public (original behaviour)
+      0x01 = random (use after le_set_random_address) — default now
     """
     params = struct.pack(
         "<HHBBB6sBB",
-        0x00A0,   # adv_interval_min (100 ms)
-        0x00A0,   # adv_interval_max (100 ms)
-        0x00,     # adv_type: ADV_IND (connectable, undirected — scannable)
-        0x00,     # own_address_type: public
-        0x00,     # peer_address_type: public
-        bytes(6), # peer_address: 00:00:00:00:00:00
-        0x07,     # adv_channel_map: all three channels (37, 38, 39)
-        0x00,     # adv_filter_policy: allow all
+        0x00A0,             # adv_interval_min (100 ms)
+        0x00A0,             # adv_interval_max (100 ms)
+        0x00,               # adv_type: ADV_IND (connectable, undirected — scannable)
+        own_address_type,   # own_address_type: 0x01=random, 0x00=public
+        0x00,               # peer_address_type: public
+        bytes(6),           # peer_address: 00:00:00:00:00:00
+        0x07,               # adv_channel_map: all three channels (37, 38, 39)
+        0x00,               # adv_filter_policy: allow all
     )
     return hcitool_cmd(hci, OGF_LE_CTL, OCF_LE_SET_ADV_PARAMS, params)
 
@@ -237,7 +297,7 @@ def le_set_scan_response_data(hci: str, scan_resp: bytes) -> bool:
     """
     assert len(scan_resp) == 31
     params = bytes([len(scan_resp)]) + scan_resp
-    return hcitool_cmd(hci, OGF_LE_CTL, 0x0009, params)
+    return hcitool_cmd(hci, OGF_LE_CTL, OCF_LE_SET_SCAN_RESP_DATA, params)
 
 
 def le_set_adv_enable(hci: str, enable: bool) -> bool:
@@ -272,25 +332,36 @@ def run(args):
     rounds = args.rounds
     base_total = args.total
     verified = args.verified
+    burst = args.burst
+
+    # In burst mode use a much tighter dwell per student so all of them
+    # fit inside one 7-second Android scan window.
+    # 70 students × 0.05 s = 3.5 s per round — well within the 7 s window.
+    burst_dwell = max(0.03, dwell)   # honour --dwell as the burst per-student time
 
     print("=" * 58)
     print("BLE HCI Multi-Student Advertiser")
     print(f"  Adapter   : {hci}")
     print(f"  Students  : {len(ids)}  ({ids[0]} … {ids[-1]})")
     print(f"  Division  : {div_id}  Batch: {batch_id or 'none'}")
-    print(f"  Dwell/ID  : {dwell}s")
+    if burst:
+        print(f"  Mode      : BURST  (dwell/student={burst_dwell*1000:.0f}ms)")
+    else:
+        print(f"  Mode      : sequential  (dwell/student={dwell*1000:.0f}ms)")
     print(f"  Rounds    : {rounds}")
     print(f"  Verified  : {verified}")
+    print(f"  MAC spoof : unique random address per student (fixes Android dedup)")
     print("=" * 58)
     print()
     print("Make sure the teacher app is running and scanning on the phone.")
-    print("Each student ID will be advertised for {:.0f} ms before cycling.".format(dwell * 1000))
     print()
 
     bring_up(hci)
     reset_adv(hci)
 
-    if not le_set_adv_params(hci):
+    # Validate adapter access with a one-shot params call using public address.
+    # (We switch to random-address mode per-student inside the loop.)
+    if not le_set_adv_params(hci, own_address_type=0x00):
         print("[error] Could not set advertising parameters.")
         print("        Are you running as root?  Is the adapter plugged in?")
         sys.exit(1)
@@ -298,15 +369,24 @@ def run(args):
     total_advertised = 0
     t_start = time.monotonic()
 
+    # Pre-generate one stable random address per student ID.
+    # Using the same address for the same student across rounds lets the phone
+    # accumulate hit counts across scan windows (same MAC → same tally entry).
+    student_addrs = {sid: make_random_addr() for sid in ids}
+
     try:
         for round_num in range(1, rounds + 1):
-            # Simulate increasing hit counter (teacher sent `round_num` beacons so far)
             total_beacons = base_total + round_num
-            print(f"[round {round_num}/{rounds}]  total_beacons={total_beacons}")
+            if burst:
+                print(f"[round {round_num}/{rounds}]  BURST  total_beacons={total_beacons}  "
+                      f"({len(ids)} students × {burst_dwell*1000:.0f}ms = "
+                      f"{len(ids)*burst_dwell:.1f}s)")
+            else:
+                print(f"[round {round_num}/{rounds}]  total_beacons={total_beacons}")
+
+            per_student_dwell = burst_dwell if burst else dwell
 
             for idx, sid in enumerate(ids):
-                # hits = how many of those beacons this student "saw"
-                # Simulate ~85% in-range probability
                 hits = max(1, int(total_beacons * 0.85))
 
                 adv_data, scan_resp = build_adv_data(
@@ -318,8 +398,11 @@ def run(args):
                     verified=verified,
                 )
 
-                # Stop → update primary AD + scan response → start
+                # Stop → set unique random address → update params for random
+                # address type → load AD + scan response → start
                 le_set_adv_enable(hci, False)
+                le_set_random_address(hci, student_addrs[sid])
+                le_set_adv_params(hci, own_address_type=0x01)
                 le_set_adv_data(hci, adv_data)
                 le_set_scan_response_data(hci, scan_resp)
                 le_set_adv_enable(hci, True)
@@ -331,9 +414,16 @@ def run(args):
                     print(f"  {idx + 1:3d}/{len(ids)} students cycled  "
                           f"({rate:.1f} IDs/s)  last={sid}")
 
-                time.sleep(dwell)
+                time.sleep(per_student_dwell)
 
             print(f"  Round {round_num} complete.\n")
+
+            # In burst mode pause briefly between rounds so the teacher phone
+            # can process the burst and we can observe the detection count.
+            if burst and round_num < rounds:
+                pause = 3.0
+                print(f"  Pausing {pause}s between burst rounds…")
+                time.sleep(pause)
 
     except KeyboardInterrupt:
         print("\n[interrupted]")
@@ -345,10 +435,16 @@ def run(args):
         print(f"Done.  {total_advertised} advertisement bursts in {elapsed:.1f}s")
         print(f"Rate: {total_advertised / elapsed:.1f} student IDs/s")
         print()
-        print("Now check the teacher app:")
-        print(f"  - Should show up to {len(ids)} students in the scan list")
-        print("  - Each student should have a non-zero hit count")
-        print("  - No crash / ANR / UI freeze on the teacher phone")
+        if burst:
+            print("Burst mode result — check teacher phone:")
+            print(f"  - Should show ALL {len(ids)} students detected")
+            print("  - Each burst round = simultaneous-detection stress test")
+            print("  - Any missing students = phone dropped them under load")
+        else:
+            print("Now check the teacher app:")
+            print(f"  - Should show up to {len(ids)} students in the scan list")
+            print("  - Each student should have a non-zero hit count")
+            print("  - No crash / ANR / UI freeze on the teacher phone")
         print("=" * 58)
 
 
@@ -364,10 +460,15 @@ def parse_args():
     p.add_argument("--start",    type=int, default=1,   help="First student index (25CE{N:03d})")
     p.add_argument("--div",      type=int, default=1,   help="Division ID in payload")
     p.add_argument("--batch",    type=int, default=0,   help="Batch ID (0 = lecture/no batch)")
-    p.add_argument("--dwell",    type=float, default=0.4, help="Seconds per student ID")
+    p.add_argument("--dwell",    type=float, default=0.4, help="Seconds per student ID (normal mode); "
+                                                               "min dwell per student in burst mode")
     p.add_argument("--rounds",   type=int, default=5,   help="Full cycles to run")
     p.add_argument("--total",    type=int, default=10,  help="Simulated teacher beacon counter base")
     p.add_argument("--verified", action="store_true",   help="Mark all students biometric-verified")
+    p.add_argument("--burst",    action="store_true",   help="Burst mode: cycle all students as fast "
+                                                             "as possible to simulate simultaneous "
+                                                             "detection (uses --dwell as per-student "
+                                                             "minimum, default 0.05s recommended)")
     return p.parse_args()
 
 

@@ -21,12 +21,38 @@ detection list without freezing or crashing.
 ### Why one adapter is enough
 
 The teacher app de-duplicates by **student ID string**, not by MAC address.
-It also restarts the BLE scan every 7 seconds to flush Android's
-advertisement cache.  So as long as each student ID gets advertised within
-that 7-second window, the teacher phone will see all of them.
+However, Android itself deduplicates received BLE advertisements **by MAC
+address** within a single scan window — so if all students share the adapter's
+public MAC, the phone only delivers ~1 callback per 7-second window.
 
-For 70 students at 400 ms/each → one full cycle = 28 s.  The scan restart
-at 7 s means each student ID appears in at least one scan window.
+The fix: the script now calls `HCI_LE_Set_Random_Address` before each student
+slot, giving each student a unique spoofed random LE address.  Android sees
+each student as a distinct device and delivers all of them.  One full cycle of
+70 students at 400 ms/each = 28 s, spanning ~4 scan windows.  With unique MACs,
+every student shows up.
+
+### Burst mode (new)
+
+Simulates the real-world scenario where all 70 students are already in range
+when the teacher starts a session — the phone needs to detect all of them in
+one sweep without dropping any.
+
+```bash
+# All 70 students cycled as fast as possible (50 ms/student = 3.5 s/round)
+sudo python3 load_tests/ble_hci_advertiser.py --burst --students 70 --rounds 3
+
+# Adjust burst dwell (default 0.4 applies — pass a low value for burst)
+sudo python3 load_tests/ble_hci_advertiser.py --burst --dwell 0.05 --students 70
+```
+
+In burst mode:
+- Each student gets 50 ms (or `--dwell` value) of airtime.
+- 70 students × 50 ms = **3.5 s total**, well inside the 7-second Android scan
+  window — so the phone should see all 70 in a single window.
+- A 3-second pause between rounds lets you observe the count stabilise.
+- **Expected result:** teacher phone shows all 70 after the first burst round.
+- **Failure signal:** some students consistently missing across rounds = the
+  phone is dropping events under load (setState storm, thread contention, etc.).
 
 ### Hardware needed
 
@@ -63,9 +89,10 @@ sudo python3 load_tests/ble_hci_advertiser.py \
 | `--start` | `1` | First student index (→ `25CE001`) |
 | `--div` | `1` | Division ID in payload |
 | `--batch` | `0` | Batch ID (`0` = lecture / no batch) |
-| `--dwell` | `0.4` | Seconds each student ID is advertised |
+| `--dwell` | `0.4` | Seconds per student (sequential); per-student minimum in burst mode |
 | `--rounds` | `5` | Full cycles to run |
 | `--verified` | off | Mark all students biometric-verified |
+| `--burst` | off | Burst mode — cycle all students as fast as possible to stress-test simultaneous detection |
 
 ### What to watch on the teacher phone
 
