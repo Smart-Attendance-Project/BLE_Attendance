@@ -50,26 +50,25 @@ jobs:
       #   KEY_PASSWORD      – key password
       #   STORE_PASSWORD    – keystore password
       - name: Decode keystore
-        if: ${{ env.KEYSTORE_BASE64 != '' }}
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
           echo "$KEYSTORE_BASE64" | base64 --decode > $RUNNER_TEMP/release.jks
 
       - name: Write key.properties
-        if: ${{ env.KEYSTORE_BASE64 != '' }}
         env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEY_ALIAS:       ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD:    ${{ secrets.KEY_PASSWORD }}
-          STORE_PASSWORD:  ${{ secrets.STORE_PASSWORD }}
+          KEY_ALIAS:      ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD:   ${{ secrets.KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
         run: |
-          cat > mobile/ble_attendance_mobile/android/key.properties <<EOF
+          cat > mobile/ble_attendance_mobile/android/key.properties << EOF
           storeFile=$RUNNER_TEMP/release.jks
           storePassword=$STORE_PASSWORD
           keyAlias=$KEY_ALIAS
           keyPassword=$KEY_PASSWORD
           EOF
+          # Strip leading whitespace that YAML indentation adds to heredoc lines
+          sed -i 's/^[[:space:]]*//' mobile/ble_attendance_mobile/android/key.properties
 
       # ── Dependencies ───────────────────────────────────────────────────────
       - name: Install Flutter packages
