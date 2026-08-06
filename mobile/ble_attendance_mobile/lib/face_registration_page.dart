@@ -9,6 +9,7 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
 
 import 'ml/face_recognizer.dart';
+import 'ml/liveness_detector.dart';
 
 /// Callback signature for uploading the embedding to the server.
 /// Returns `true` if the server accepted it, `false` or throws on failure.
@@ -38,6 +39,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     ),
   );
   final FaceRecognizer _recognizer = FaceRecognizer();
+  final LivenessDetector _livenessDetector = LivenessDetector();
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
 
   bool _initialising = true;
@@ -54,6 +56,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   Future<void> _init() async {
     try {
       await _recognizer.init();
+      await _livenessDetector.init();
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
         if (mounted) {
@@ -93,6 +96,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     _cameraController?.dispose();
     _faceDetector.close();
     _recognizer.dispose();
+    _livenessDetector.dispose();
     super.dispose();
   }
 
@@ -192,6 +196,28 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
             ),
           );
         }
+      }
+
+      // --- Passive liveness check (MiniFASNetV2) ---
+      // Ensures the person is physically present — blocks printed photos and
+      // screen replays at registration time so a fake face can never be enrolled.
+      setState(() => _statusText = 'Checking liveness…');
+      final livenessResult = _livenessDetector.check(
+        fullImage,
+        bboxX: rect.left.toInt(),
+        bboxY: rect.top.toInt(),
+        bboxW: rect.width.toInt(),
+        bboxH: rect.height.toInt(),
+      );
+
+      if (!livenessResult.isLive) {
+        setState(() {
+          _statusText =
+              'Liveness check failed (${livenessResult.spoofType}). '
+              'Please use your real face.';
+          _processing = false;
+        });
+        return;
       }
 
       // Generate embedding (includes preprocessing)

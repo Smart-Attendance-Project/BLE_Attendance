@@ -8,6 +8,7 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
 
 import 'ml/face_recognizer.dart';
+import 'ml/liveness_detector.dart';
 
 // ---------------------------------------------------------------------------
 // Verification phases
@@ -44,6 +45,7 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
     ),
   );
   final FaceRecognizer _recognizer = FaceRecognizer();
+  final LivenessDetector _livenessDetector = LivenessDetector();
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
 
   // State
@@ -70,6 +72,7 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
     _cam?.dispose();
     _faceDetector.close();
     _recognizer.dispose();
+    _livenessDetector.dispose();
     super.dispose();
   }
 
@@ -100,6 +103,7 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
       _savedEmbeddings = embeddingsList;
 
       await _recognizer.init();
+      await _livenessDetector.init();
 
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
@@ -216,6 +220,29 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
       if (lightingDiff > 65.0) {
         _handleFailedAttempt(
           'Lighting is too uneven. Avoid direct side/backlight.',
+        );
+        try {
+          await File(xFile.path).delete();
+        } catch (_) {}
+        return;
+      }
+
+      // --- Passive liveness check (MiniFASNetV2) ---
+      // Runs on the 2.7× scale crop so the model sees neck/forehead texture.
+      // No gesture needed — user just looks at the camera.
+      setState(() => _statusText = 'Checking liveness…');
+      final livenessResult = _livenessDetector.check(
+        fullImage,
+        bboxX: rect.left.toInt(),
+        bboxY: rect.top.toInt(),
+        bboxW: rect.width.toInt(),
+        bboxH: rect.height.toInt(),
+      );
+
+      if (!livenessResult.isLive) {
+        _handleFailedAttempt(
+          'Liveness check failed (${livenessResult.spoofType}). '
+          'Please use your real face.',
         );
         try {
           await File(xFile.path).delete();
