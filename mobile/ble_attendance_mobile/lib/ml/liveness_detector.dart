@@ -11,7 +11,9 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 /// Model: litert-community/Silent-Face-Anti-Spoofing-LiteRT (Apache-2.0)
 /// Architecture: MiniFASNetV2 (minivision-ai), 1.85 MB, ~5 ms/frame.
 ///
-/// Input:  [1, 3, 80, 80]  — NCHW, BGR channel order, pixel values in [0, 1].
+/// Input:  [1, 80, 80, 3]  — NHWC, BGR channel order, pixel values in [0, 1].
+///                           (Model weights use NCHW/BGR convention but TFLite
+///                           CPU/XNNPACK requires NHWC; we reorder at runtime.)
 /// Output: [1, 3]          — softmax over {spoof-print, live, spoof-replay}.
 ///                           index 1 is the "live" probability.
 ///                           The face is considered live when argmax == 1 AND
@@ -96,10 +98,12 @@ class LivenessDetector {
       interpolation: img.Interpolation.linear,
     );
 
-    // --- 3. Build NCHW input tensor [1, 3, 80, 80] in BGR, x/255 -------
-    // Layout: [batch=0, channel, row, col]
-    // Channel order: 0=B, 1=G, 2=R  (opposite of RGB)
-    final input = Float32List(1 * 3 * _inputSize * _inputSize);
+    // --- 3. Build NHWC input tensor [1, 80, 80, 3] in BGR, x/255 -------
+    // The model was trained with NCHW BGR input, but TFLite's CPU (XNNPACK)
+    // delegate only supports NHWC layout. We therefore lay out the data in
+    // NHWC order and reshape to [1, 80, 80, 3]; the channel order stays
+    // BGR (B=ch0, G=ch1, R=ch2) as the model weights expect.
+    final input = Float32List(1 * _inputSize * _inputSize * 3);
 
     for (int row = 0; row < _inputSize; row++) {
       for (int col = 0; col < _inputSize; col++) {
@@ -108,16 +112,15 @@ class LivenessDetector {
         final g = pixel.g.toDouble() / 255.0;
         final b = pixel.b.toDouble() / 255.0;
 
-        // NCHW index = batch*C*H*W + channel*H*W + row*W + col
-        // batch=0, C=3, H=80, W=80
-        final base = row * _inputSize + col;
-        input[0 * _inputSize * _inputSize + base] = b; // channel 0 = B
-        input[1 * _inputSize * _inputSize + base] = g; // channel 1 = G
-        input[2 * _inputSize * _inputSize + base] = r; // channel 2 = R
+        // NHWC index = row*W*C + col*C + channel
+        final base = (row * _inputSize + col) * 3;
+        input[base + 0] = b; // channel 0 = B
+        input[base + 1] = g; // channel 1 = G
+        input[base + 2] = r; // channel 2 = R
       }
     }
 
-    final inputTensor = input.reshape([1, 3, _inputSize, _inputSize]);
+    final inputTensor = input.reshape([1, _inputSize, _inputSize, 3]);
 
     // --- 4. Run inference -----------------------------------------------
     final output = List.filled(1 * 3, 0.0).reshape([1, 3]);
