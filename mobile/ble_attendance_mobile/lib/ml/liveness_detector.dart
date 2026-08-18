@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
 
@@ -11,9 +12,9 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 /// Model: litert-community/Silent-Face-Anti-Spoofing-LiteRT (Apache-2.0)
 /// Architecture: MiniFASNetV2 (minivision-ai), 1.85 MB, ~5 ms/frame.
 ///
-/// Input:  [1, 80, 80, 3]  — NHWC, BGR channel order, pixel values in [0, 1].
-///                           (Model weights use NCHW/BGR convention but TFLite
-///                           CPU/XNNPACK requires NHWC; we reorder at runtime.)
+/// Input:  [1, 3, 80, 80]  — NCHW, BGR channel order, pixel values in [0, 1].
+///         The .tflite file declares [1,3,80,80] (NCHW). tflite_flutter does
+///         NOT auto-transpose, so the data buffer must be laid out in NCHW order.
 /// Output: [1, 3]          — softmax over {spoof-print, live, spoof-replay}.
 ///                           index 1 is the "live" probability.
 ///                           The face is considered live when argmax == 1 AND
@@ -44,11 +45,29 @@ class LivenessDetector {
 
   Interpreter? _interpreter;
 
-  LivenessDetector({this.liveThreshold = 0.60});
+  /// Whether the model's input tensor is NCHW ([1,3,H,W]) or NHWC ([1,H,W,3]).
+  /// Determined at init() by inspecting the actual tensor shape.
+  bool _isNCHW = true;
+
+  LivenessDetector({this.liveThreshold = 0.50});
 
   /// Initialise the TFLite interpreter from the bundled asset.
   Future<void> init() async {
     _interpreter = await Interpreter.fromAsset('assets/silentface.tflite');
+
+    // Inspect the model's declared input shape to determine NCHW vs NHWC.
+    final inputShape = _interpreter!.getInputTensor(0).shape;
+    debugPrint('[LivenessDetector] Model input shape: $inputShape');
+
+    // [1, 3, 80, 80] → NCHW (dim[1]=3, dim[2]=80, dim[3]=80)
+    // [1, 80, 80, 3] → NHWC (dim[1]=80, dim[2]=80, dim[3]=3)
+    if (inputShape.length == 4 && inputShape[1] == 3 && inputShape[2] == _inputSize) {
+      _isNCHW = true;
+      debugPrint('[LivenessDetector] Detected NCHW layout');
+    } else {
+      _isNCHW = false;
+      debugPrint('[LivenessDetector] Detected NHWC layout');
+    }
   }
 
   /// Dispose of the interpreter to free native memory.
@@ -98,29 +117,49 @@ class LivenessDetector {
       interpolation: img.Interpolation.linear,
     );
 
-    // --- 3. Build NHWC input tensor [1, 80, 80, 3] in BGR, x/255 -------
-    // The model was trained with NCHW BGR input, but TFLite's CPU (XNNPACK)
-    // delegate only supports NHWC layout. We therefore lay out the data in
-    // NHWC order and reshape to [1, 80, 80, 3]; the channel order stays
-    // BGR (B=ch0, G=ch1, R=ch2) as the model weights expect.
-    final input = Float32List(1 * _inputSize * _inputSize * 3);
+    // --- 3. Build input tensor in BGR, x/255 ----------------------------
+    // The data layout (NCHW vs NHWC) must match the model's declared shape.
+    // tflite_flutter does NOT auto-transpose.
+    final input = Float32List(1 * 3 * _inputSize * _inputSize);
 
-    for (int row = 0; row < _inputSize; row++) {
-      for (int col = 0; col < _inputSize; col++) {
-        final pixel = resized.getPixel(col, row);
-        final r = pixel.r.toDouble() / 255.0;
-        final g = pixel.g.toDouble() / 255.0;
-        final b = pixel.b.toDouble() / 255.0;
+    if (_isNCHW) {
+      // NCHW layout: [1, 3, 80, 80]
+      // Index: batch*C*H*W + channel*H*W + row*W + col
+      for (int row = 0; row < _inputSize; row++) {
+        for (int col = 0; col < _inputSize; col++) {
+          final pixel = resized.getPixel(col, row);
+          final r = pixel.r.toDouble() / 255.0;
+          final g = pixel.g.toDouble() / 255.0;
+          final b = pixel.b.toDouble() / 255.0;
 
-        // NHWC index = row*W*C + col*C + channel
-        final base = (row * _inputSize + col) * 3;
-        input[base + 0] = b; // channel 0 = B
-        input[base + 1] = g; // channel 1 = G
-        input[base + 2] = r; // channel 2 = R
+          final base = row * _inputSize + col; // position within one channel plane
+          input[0 * _inputSize * _inputSize + base] = b; // channel 0 = B
+          input[1 * _inputSize * _inputSize + base] = g; // channel 1 = G
+          input[2 * _inputSize * _inputSize + base] = r; // channel 2 = R
+        }
+      }
+    } else {
+      // NHWC layout: [1, 80, 80, 3]
+      // Index: row*W*C + col*C + channel
+      for (int row = 0; row < _inputSize; row++) {
+        for (int col = 0; col < _inputSize; col++) {
+          final pixel = resized.getPixel(col, row);
+          final r = pixel.r.toDouble() / 255.0;
+          final g = pixel.g.toDouble() / 255.0;
+          final b = pixel.b.toDouble() / 255.0;
+
+          final base = (row * _inputSize + col) * 3;
+          input[base + 0] = b; // channel 0 = B
+          input[base + 1] = g; // channel 1 = G
+          input[base + 2] = r; // channel 2 = R
+        }
       }
     }
 
-    final inputTensor = input.reshape([1, _inputSize, _inputSize, 3]);
+    final inputShape = _isNCHW
+        ? [1, 3, _inputSize, _inputSize]
+        : [1, _inputSize, _inputSize, 3];
+    final inputTensor = input.reshape(inputShape);
 
     // --- 4. Run inference -----------------------------------------------
     final output = List.filled(1 * 3, 0.0).reshape([1, 3]);
@@ -134,6 +173,13 @@ class LivenessDetector {
     // argmax check: the live class must have the highest probability
     final argmax = scores.indexOf(scores.reduce((a, b) => a > b ? a : b));
     final isLive = (argmax == 1) && (liveScore >= liveThreshold);
+
+    debugPrint(
+      '[LivenessDetector] scores: print=${scores[0].toStringAsFixed(4)}, '
+      'live=${scores[1].toStringAsFixed(4)}, '
+      'replay=${scores[2].toStringAsFixed(4)} → '
+      'argmax=$argmax, isLive=$isLive (threshold=$liveThreshold)',
+    );
 
     return LivenessResult(
       isLive: isLive,

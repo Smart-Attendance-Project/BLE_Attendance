@@ -214,6 +214,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         setState(() {
           _statusText =
               'Liveness check failed (${livenessResult.spoofType}). '
+              'Live: ${(livenessResult.liveScore * 100).toStringAsFixed(1)}% — '
               'Please use your real face.';
           _processing = false;
         });

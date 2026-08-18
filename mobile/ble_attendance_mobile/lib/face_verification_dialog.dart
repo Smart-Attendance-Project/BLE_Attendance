@@ -242,6 +242,7 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
       if (!livenessResult.isLive) {
         _handleFailedAttempt(
           'Liveness check failed (${livenessResult.spoofType}). '
+          'Live: ${(livenessResult.liveScore * 100).toStringAsFixed(1)}% — '
           'Please use your real face.',
         );
         try {
