@@ -227,16 +227,20 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
         return;
       }
 
-      // --- Passive liveness check (MiniFASNetV2) ---
-      // Runs on the 2.7× scale crop so the model sees neck/forehead texture.
+      // --- Passive liveness check ---
       // No gesture needed — user just looks at the camera.
       setState(() => _statusText = 'Checking liveness…');
+      final face = faces.first;
       final livenessResult = _livenessDetector.check(
         fullImage,
         bboxX: rect.left.toInt(),
         bboxY: rect.top.toInt(),
         bboxW: rect.width.toInt(),
         bboxH: rect.height.toInt(),
+        leftEyeOpenProbability: face.leftEyeOpenProbability,
+        rightEyeOpenProbability: face.rightEyeOpenProbability,
+        headEulerAngleY: face.headEulerAngleY,
+        headEulerAngleZ: face.headEulerAngleZ,
       );
 
       if (!livenessResult.isLive) {

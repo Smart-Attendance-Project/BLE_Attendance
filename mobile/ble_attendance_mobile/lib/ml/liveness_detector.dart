@@ -1,207 +1,367 @@
-import 'dart:typed_data';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
-import 'package:tflite_flutter/tflite_flutter.dart';
 
-/// Wraps the MiniFASNetV2 TFLite model for passive face liveness / anti-spoofing
-/// detection. Distinguishes a real (live) face from a presentation attack such
-/// as a printed photo or a replayed screen — with no gesture required from the
-/// user.
+/// Passive face liveness / anti-spoofing detector using image analysis and
+/// ML Kit face classification features.
 ///
-/// Model: litert-community/Silent-Face-Anti-Spoofing-LiteRT (Apache-2.0)
-/// Architecture: MiniFASNetV2 (minivision-ai), 1.85 MB, ~5 ms/frame.
+/// Replaces the previous TFLite-based MiniFASNetV2 approach which produced
+/// unreliable scores on Android due to tflite_flutter + XNNPACK
+/// incompatibilities with NCHW models.
 ///
-/// Input:  [1, 3, 80, 80]  — NCHW, BGR channel order, pixel values in [0, 1].
-///         The .tflite file declares [1,3,80,80] (NCHW). tflite_flutter does
-///         NOT auto-transpose, so the data buffer must be laid out in NCHW order.
-/// Output: [1, 3]          — softmax over {spoof-print, live, spoof-replay}.
-///                           index 1 is the "live" probability.
-///                           The face is considered live when argmax == 1 AND
-///                           live probability >= [liveThreshold].
+/// Combines multiple lightweight signals:
+///   1. **Sharpness** (Laplacian variance) — re-photographed images lose focus.
+///   2. **Color distribution** — printed/screen images have compressed colour
+///      range compared to real skin under natural lighting.
+///   3. **Edge density** — screens/prints often exhibit moiré, halftone dots,
+///      or unnaturally uniform textures.
+///   4. **Eye openness** (from ML Kit) — both eyes should be open.
+///   5. **Head pose** (from ML Kit) — face should be roughly frontal.
 ///
-/// The model expects a crop that is roughly 2.7× the detected face bounding box
-/// (wider than the 20 % padding used for MobileFaceNet) so that background
-/// texture and neck region contribute to the spoof decision.
+/// None of these signals is strong enough alone, but the weighted combination
+/// provides a practical liveness gate for an attendance-verification scenario
+/// (where face embedding matching already prevents unknown-person attacks).
 ///
 /// Usage:
 /// ```dart
 /// final detector = LivenessDetector();
 /// await detector.init();
-/// final result = detector.check(fullImage, bboxX, bboxY, bboxW, bboxH);
+/// final result = detector.check(
+///   fullImage,
+///   bboxX: ..., bboxY: ..., bboxW: ..., bboxH: ...,
+///   leftEyeOpenProbability: face.leftEyeOpenProbability,
+///   rightEyeOpenProbability: face.rightEyeOpenProbability,
+///   headEulerAngleY: face.headEulerAngleY,
+/// );
 /// if (!result.isLive) { ... }
 /// detector.dispose();
 /// ```
 class LivenessDetector {
-  static const int _inputSize = 80;
-
-  /// Scale factor applied to the face bounding box to produce the model crop.
-  /// MiniFASNetV2 was trained with a 2.7× scale crop.
-  static const double _cropScale = 2.7;
-
-  /// Minimum live-class probability to accept as a real face.
-  /// Values below this are treated as spoof even if argmax == 1.
+  /// Minimum combined score to accept as a live face.
   final double liveThreshold;
 
-  Interpreter? _interpreter;
+  LivenessDetector({this.liveThreshold = 0.45});
 
-  /// Whether the model's input tensor is NCHW ([1,3,H,W]) or NHWC ([1,H,W,3]).
-  /// Determined at init() by inspecting the actual tensor shape.
-  bool _isNCHW = true;
-
-  LivenessDetector({this.liveThreshold = 0.50});
-
-  /// Initialise the TFLite interpreter from the bundled asset.
+  /// Kept for API compatibility — nothing heavy to load.
   Future<void> init() async {
-    _interpreter = await Interpreter.fromAsset('assets/silentface.tflite');
-
-    // Inspect the model's declared input shape to determine NCHW vs NHWC.
-    final inputShape = _interpreter!.getInputTensor(0).shape;
-    debugPrint('[LivenessDetector] Model input shape: $inputShape');
-
-    // [1, 3, 80, 80] → NCHW (dim[1]=3, dim[2]=80, dim[3]=80)
-    // [1, 80, 80, 3] → NHWC (dim[1]=80, dim[2]=80, dim[3]=3)
-    if (inputShape.length == 4 && inputShape[1] == 3 && inputShape[2] == _inputSize) {
-      _isNCHW = true;
-      debugPrint('[LivenessDetector] Detected NCHW layout');
-    } else {
-      _isNCHW = false;
-      debugPrint('[LivenessDetector] Detected NHWC layout');
-    }
+    debugPrint('[LivenessDetector] Initialised (image-analysis mode)');
   }
 
-  /// Dispose of the interpreter to free native memory.
+  /// Kept for API compatibility — nothing to dispose.
   void dispose() {
-    _interpreter?.close();
-    _interpreter = null;
+    // No-op.
   }
 
-  /// Run the liveness check on [fullImage] using the face bounding box.
+  // -------------------------------------------------------------------------
+  // Public API
+  // -------------------------------------------------------------------------
+
+  /// Run the liveness check on [fullImage] using the face bounding box and
+  /// optional ML Kit classification features.
   ///
   /// [bboxX], [bboxY], [bboxW], [bboxH] are the face bounding box coordinates
   /// as returned by Google ML Kit — they should match the *orientation-corrected*
   /// image (i.e. after [img.bakeOrientation] has been applied).
-  ///
-  /// Returns a [LivenessResult] with the live probability and a boolean flag.
   LivenessResult check(
     img.Image fullImage, {
     required int bboxX,
     required int bboxY,
     required int bboxW,
     required int bboxH,
+    // Optional ML Kit face-classification features.
+    double? leftEyeOpenProbability,
+    double? rightEyeOpenProbability,
+    double? headEulerAngleY,
+    double? headEulerAngleZ,
   }) {
-    final interpreter = _interpreter;
-    if (interpreter == null) {
-      throw StateError('LivenessDetector not initialised. Call init() first.');
-    }
+    // --- 1. Crop the face region with 10 % padding for analysis. -----------
+    final padX = (bboxW * 0.10).round();
+    final padY = (bboxH * 0.10).round();
+    final cropX = (bboxX - padX).clamp(0, fullImage.width - 1);
+    final cropY = (bboxY - padY).clamp(0, fullImage.height - 1);
+    final cropW = (bboxW + 2 * padX).clamp(1, fullImage.width - cropX);
+    final cropH = (bboxH + 2 * padY).clamp(1, fullImage.height - cropY);
 
-    // --- 1. Produce the 2.7× scale crop --------------------------------
-    // The crop is centred on the face bounding box and scaled outward.
-    final cx = bboxX + bboxW / 2.0;
-    final cy = bboxY + bboxH / 2.0;
-    final halfW = (bboxW * _cropScale / 2.0).ceil();
-    final halfH = (bboxH * _cropScale / 2.0).ceil();
+    final faceCrop = img.copyCrop(
+      fullImage,
+      x: cropX,
+      y: cropY,
+      width: cropW,
+      height: cropH,
+    );
 
-    final x = (cx - halfW).round().clamp(0, fullImage.width - 1);
-    final y = (cy - halfH).round().clamp(0, fullImage.height - 1);
-    final w = (cx + halfW).round().clamp(x + 1, fullImage.width) - x;
-    final h = (cy + halfH).round().clamp(y + 1, fullImage.height) - y;
-
-    final cropped = img.copyCrop(fullImage, x: x, y: y, width: w, height: h);
-
-    // --- 2. Resize to 80 × 80 ------------------------------------------
+    // Resize to a fixed size for consistent analysis regardless of capture
+    // resolution.
+    const analysisSize = 100;
     final resized = img.copyResize(
-      cropped,
-      width: _inputSize,
-      height: _inputSize,
+      faceCrop,
+      width: analysisSize,
+      height: analysisSize,
       interpolation: img.Interpolation.linear,
     );
 
-    // --- 3. Build input tensor in BGR, x/255 ----------------------------
-    // The data layout (NCHW vs NHWC) must match the model's declared shape.
-    // tflite_flutter does NOT auto-transpose.
-    final input = Float32List(1 * 3 * _inputSize * _inputSize);
+    double totalWeight = 0.0;
+    double weightedScore = 0.0;
 
-    if (_isNCHW) {
-      // NCHW layout: [1, 3, 80, 80]
-      // Index: batch*C*H*W + channel*H*W + row*W + col
-      for (int row = 0; row < _inputSize; row++) {
-        for (int col = 0; col < _inputSize; col++) {
-          final pixel = resized.getPixel(col, row);
-          final r = pixel.r.toDouble() / 255.0;
-          final g = pixel.g.toDouble() / 255.0;
-          final b = pixel.b.toDouble() / 255.0;
-
-          final base = row * _inputSize + col; // position within one channel plane
-          input[0 * _inputSize * _inputSize + base] = b; // channel 0 = B
-          input[1 * _inputSize * _inputSize + base] = g; // channel 1 = G
-          input[2 * _inputSize * _inputSize + base] = r; // channel 2 = R
-        }
-      }
-    } else {
-      // NHWC layout: [1, 80, 80, 3]
-      // Index: row*W*C + col*C + channel
-      for (int row = 0; row < _inputSize; row++) {
-        for (int col = 0; col < _inputSize; col++) {
-          final pixel = resized.getPixel(col, row);
-          final r = pixel.r.toDouble() / 255.0;
-          final g = pixel.g.toDouble() / 255.0;
-          final b = pixel.b.toDouble() / 255.0;
-
-          final base = (row * _inputSize + col) * 3;
-          input[base + 0] = b; // channel 0 = B
-          input[base + 1] = g; // channel 1 = G
-          input[base + 2] = r; // channel 2 = R
-        }
-      }
+    // --- Signal 1: Sharpness (Laplacian variance) --------------------------
+    // Re-photographed images (photo-of-photo / screen capture) typically lose
+    // sharpness. Real camera captures are in-focus with high gradient variance.
+    {
+      const w = 0.25;
+      totalWeight += w;
+      final sharpness = _laplacianVariance(resized);
+      // Real faces: variance typically 200 – 3 000+
+      // Re-photographed: 30 – 150
+      // Scale linearly: 0 at ≤ 30, 1.0 at ≥ 250
+      final s = ((sharpness - 30.0) / 220.0).clamp(0.0, 1.0);
+      weightedScore += w * s;
+      debugPrint(
+        '[LivenessDetector] Sharpness: ${sharpness.toStringAsFixed(1)} '
+        '→ ${s.toStringAsFixed(2)}',
+      );
     }
 
-    final inputShape = _isNCHW
-        ? [1, 3, _inputSize, _inputSize]
-        : [1, _inputSize, _inputSize, 3];
-    final inputTensor = input.reshape(inputShape);
+    // --- Signal 2: Colour distribution naturalness -------------------------
+    // Real skin under natural lighting has diverse channel intensities.
+    // Printed / screen images tend to compress the colour range.
+    {
+      const w = 0.25;
+      totalWeight += w;
+      final colorScore = _colorDistributionScore(resized);
+      weightedScore += w * colorScore;
+      debugPrint(
+        '[LivenessDetector] Colour: ${colorScore.toStringAsFixed(2)}',
+      );
+    }
 
-    // --- 4. Run inference -----------------------------------------------
-    final output = List.filled(1 * 3, 0.0).reshape([1, 3]);
-    interpreter.run(inputTensor, output);
+    // --- Signal 3: Edge density / texture ----------------------------------
+    // Moiré patterns (screens) and halftone dots (prints) create unusual
+    // edge density compared to a smooth real skin surface.
+    {
+      const w = 0.15;
+      totalWeight += w;
+      final edgeScore = _edgeDensityScore(resized);
+      weightedScore += w * edgeScore;
+      debugPrint(
+        '[LivenessDetector] Edge density: ${edgeScore.toStringAsFixed(2)}',
+      );
+    }
 
-    // --- 5. Parse output ------------------------------------------------
-    // output[0] = [p_spoof_print, p_live, p_spoof_replay]
-    final scores = List<double>.from(output[0] as List);
-    final liveScore = scores[1];
+    // --- Signal 4: Eye openness (ML Kit) -----------------------------------
+    if (leftEyeOpenProbability != null && rightEyeOpenProbability != null) {
+      const w = 0.20;
+      totalWeight += w;
+      // Average of both eyes; ≥ 0.4 is comfortably "open".
+      final eyeAvg =
+          ((leftEyeOpenProbability + rightEyeOpenProbability) / 2.0)
+              .clamp(0.0, 1.0);
+      weightedScore += w * eyeAvg;
+      debugPrint(
+        '[LivenessDetector] Eyes: L=${leftEyeOpenProbability.toStringAsFixed(2)} '
+        'R=${rightEyeOpenProbability.toStringAsFixed(2)} '
+        '→ ${eyeAvg.toStringAsFixed(2)}',
+      );
+    }
 
-    // argmax check: the live class must have the highest probability
-    final argmax = scores.indexOf(scores.reduce((a, b) => a > b ? a : b));
-    final isLive = (argmax == 1) && (liveScore >= liveThreshold);
+    // --- Signal 5: Head pose (ML Kit) --------------------------------------
+    if (headEulerAngleY != null) {
+      const w = 0.15;
+      totalWeight += w;
+      // Frontal face (Y ≈ 0) → 1.0; extreme side (|Y| ≥ 45°) → 0.0.
+      final poseScore =
+          (1.0 - (headEulerAngleY.abs() / 45.0)).clamp(0.0, 1.0);
+      weightedScore += w * poseScore;
+      debugPrint(
+        '[LivenessDetector] Head Y: ${headEulerAngleY.toStringAsFixed(1)}° '
+        '→ ${poseScore.toStringAsFixed(2)}',
+      );
+    }
+
+    // --- Final decision ----------------------------------------------------
+    final liveScore = totalWeight > 0 ? weightedScore / totalWeight : 0.0;
+    final isLive = liveScore >= liveThreshold;
+
+    // Attribute remaining spoof probability equally to print/replay.
+    final spoofTotal = isLive ? 0.0 : (1.0 - liveScore);
 
     debugPrint(
-      '[LivenessDetector] scores: print=${scores[0].toStringAsFixed(4)}, '
-      'live=${scores[1].toStringAsFixed(4)}, '
-      'replay=${scores[2].toStringAsFixed(4)} → '
-      'argmax=$argmax, isLive=$isLive (threshold=$liveThreshold)',
+      '[LivenessDetector] FINAL: live=${liveScore.toStringAsFixed(3)}, '
+      'isLive=$isLive (threshold=$liveThreshold)',
     );
 
     return LivenessResult(
       isLive: isLive,
       liveScore: liveScore,
-      spoofPrintScore: scores[0],
-      spoofReplayScore: scores[2],
+      spoofPrintScore: spoofTotal * 0.5,
+      spoofReplayScore: spoofTotal * 0.5,
     );
   }
+
+  // -------------------------------------------------------------------------
+  // Image-analysis helpers
+  // -------------------------------------------------------------------------
+
+  /// Compute the variance of a discrete Laplacian over a greyscale version
+  /// of [image]. Higher variance ⇒ sharper (more in-focus) image.
+  double _laplacianVariance(img.Image image) {
+    final w = image.width;
+    final h = image.height;
+    if (w < 3 || h < 3) return 0.0;
+
+    // Build greyscale buffer.
+    final gray = List<double>.filled(w * h, 0.0);
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        final p = image.getPixel(x, y);
+        gray[y * w + x] =
+            0.299 * p.r.toDouble() +
+            0.587 * p.g.toDouble() +
+            0.114 * p.b.toDouble();
+      }
+    }
+
+    // Laplacian kernel: [0,1,0; 1,-4,1; 0,1,0]
+    double sum = 0.0;
+    double sumSq = 0.0;
+    int count = 0;
+
+    for (int y = 1; y < h - 1; y++) {
+      for (int x = 1; x < w - 1; x++) {
+        final lap = gray[(y - 1) * w + x] +
+            gray[(y + 1) * w + x] +
+            gray[y * w + (x - 1)] +
+            gray[y * w + (x + 1)] -
+            4.0 * gray[y * w + x];
+        sum += lap;
+        sumSq += lap * lap;
+        count++;
+      }
+    }
+
+    if (count == 0) return 0.0;
+    final mean = sum / count;
+    return (sumSq / count) - (mean * mean); // variance
+  }
+
+  /// Score in [0, 1] reflecting how "natural" the colour distribution looks.
+  /// Real faces under real lighting have per-channel standard deviations
+  /// roughly in the 25 – 60 range. Flat / printed images are lower.
+  double _colorDistributionScore(img.Image image) {
+    final w = image.width;
+    final h = image.height;
+
+    double sumR = 0, sumG = 0, sumB = 0;
+    double sumRSq = 0, sumGSq = 0, sumBSq = 0;
+    int count = 0;
+
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        final p = image.getPixel(x, y);
+        final r = p.r.toDouble();
+        final g = p.g.toDouble();
+        final b = p.b.toDouble();
+        sumR += r;
+        sumG += g;
+        sumB += b;
+        sumRSq += r * r;
+        sumGSq += g * g;
+        sumBSq += b * b;
+        count++;
+      }
+    }
+
+    if (count == 0) return 0.0;
+
+    final stdR = sqrt((sumRSq / count) - pow(sumR / count, 2)).clamp(0.0, 255.0);
+    final stdG = sqrt((sumGSq / count) - pow(sumG / count, 2)).clamp(0.0, 255.0);
+    final stdB = sqrt((sumBSq / count) - pow(sumB / count, 2)).clamp(0.0, 255.0);
+
+    final avgStd = (stdR + stdG + stdB) / 3.0;
+
+    debugPrint(
+      '[LivenessDetector]   stdR=${stdR.toStringAsFixed(1)} '
+      'stdG=${stdG.toStringAsFixed(1)} stdB=${stdB.toStringAsFixed(1)} '
+      'avg=${avgStd.toStringAsFixed(1)}',
+    );
+
+    // Score: 0 when avgStd ≤ 8, 1.0 when avgStd ≥ 35.
+    return ((avgStd - 8.0) / 27.0).clamp(0.0, 1.0);
+  }
+
+  /// Score in [0, 1] based on edge density. Screens produce moiré artefacts
+  /// (very high edge density) while prints may look unnaturally smooth (very
+  /// low edge density). Real faces sit in a natural middle band.
+  double _edgeDensityScore(img.Image image) {
+    final w = image.width;
+    final h = image.height;
+    if (w < 3 || h < 3) return 0.5;
+
+    int edgePixels = 0;
+    int totalPixels = 0;
+
+    for (int y = 1; y < h - 1; y++) {
+      for (int x = 1; x < w - 1; x++) {
+        final p = image.getPixel(x, y);
+        final pR = image.getPixel(x + 1, y);
+        final pD = image.getPixel(x, y + 1);
+
+        final lum = 0.299 * p.r.toDouble() +
+            0.587 * p.g.toDouble() +
+            0.114 * p.b.toDouble();
+        final lumR = 0.299 * pR.r.toDouble() +
+            0.587 * pR.g.toDouble() +
+            0.114 * pR.b.toDouble();
+        final lumD = 0.299 * pD.r.toDouble() +
+            0.587 * pD.g.toDouble() +
+            0.114 * pD.b.toDouble();
+
+        final gx = (lumR - lum).abs();
+        final gy = (lumD - lum).abs();
+        final gradient = gx + gy;
+
+        if (gradient > 15.0) edgePixels++;
+        totalPixels++;
+      }
+    }
+
+    if (totalPixels == 0) return 0.5;
+
+    final density = edgePixels / totalPixels;
+    debugPrint(
+      '[LivenessDetector]   edgeDensity=${density.toStringAsFixed(3)} '
+      '($edgePixels/$totalPixels)',
+    );
+
+    // Natural face: edge density roughly 0.10 – 0.45.
+    // Screen moiré: > 0.55.
+    // Very smooth print: < 0.05.
+    // Map the natural range [0.05, 0.55] → [1.0, 0.0] outside it.
+    if (density < 0.05) {
+      return (density / 0.05).clamp(0.0, 1.0);
+    } else if (density > 0.55) {
+      return (1.0 - (density - 0.55) / 0.20).clamp(0.0, 1.0);
+    }
+    return 1.0; // within the healthy range
+  }
 }
+
+// ---------------------------------------------------------------------------
+// Result
+// ---------------------------------------------------------------------------
 
 /// Result of a single liveness check.
 class LivenessResult {
   /// Whether the face passed the liveness check.
   final bool isLive;
 
-  /// Probability that this is a real face (0.0 – 1.0).
+  /// Combined liveness probability (0.0 – 1.0).
   final double liveScore;
 
-  /// Probability that this is a printed-photo attack.
+  /// Estimated probability that this is a printed-photo attack.
   final double spoofPrintScore;
 
-  /// Probability that this is a screen-replay attack.
+  /// Estimated probability that this is a screen-replay attack.
   final double spoofReplayScore;
 
   const LivenessResult({

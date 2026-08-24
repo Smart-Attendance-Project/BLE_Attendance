@@ -198,7 +198,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         }
       }
 
-      // --- Passive liveness check (MiniFASNetV2) ---
+      // --- Passive liveness check ---
       // Ensures the person is physically present — blocks printed photos and
       // screen replays at registration time so a fake face can never be enrolled.
       setState(() => _statusText = 'Checking liveness…');
@@ -208,6 +208,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         bboxY: rect.top.toInt(),
         bboxW: rect.width.toInt(),
         bboxH: rect.height.toInt(),
+        leftEyeOpenProbability: face.leftEyeOpenProbability,
+        rightEyeOpenProbability: face.rightEyeOpenProbability,
+        headEulerAngleY: face.headEulerAngleY,
+        headEulerAngleZ: face.headEulerAngleZ,
       );
 
       if (!livenessResult.isLive) {
