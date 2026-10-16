@@ -21,10 +21,14 @@ enum _Phase { initialising, capturing, result }
 // ---------------------------------------------------------------------------
 
 /// Full-screen dialog for verifying a student's face during attendance
-/// finalisation.
+/// finalisation using passive liveness detection.
 ///
-/// Opens the front camera, captures and compares against the saved embedding.
-/// Allows up to [maxRetries] attempts. Returns `true` on a successful match.
+/// Features:
+/// - Real-time camera stream analysis (lighting, face distance, orientation).
+/// - Passive natural blink state machine (no complex interactive gestures needed).
+/// - Automatic capture upon completed blink cycle.
+/// - Secondary still-image texture analysis.
+/// - Face embedding comparison against saved profile.
 class FaceVerificationDialog extends StatefulWidget {
   const FaceVerificationDialog({super.key, this.maxRetries = 3});
   final int maxRetries;
@@ -38,10 +42,10 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
   CameraController? _cam;
   final FaceDetector _faceDetector = FaceDetector(
     options: FaceDetectorOptions(
-      performanceMode: FaceDetectorMode.accurate,
+      performanceMode: FaceDetectorMode.fast,
       enableClassification: true,
       enableLandmarks: true,
-      minFaceSize: 0.3,
+      minFaceSize: 0.25,
     ),
   );
   final FaceRecognizer _recognizer = FaceRecognizer();
@@ -56,6 +60,12 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
   bool _processing = false;
   List<List<double>>? _savedEmbeddings;
 
+  // Stream state
+  bool _isStreamActive = false;
+  bool _isProcessingFrame = false;
+  bool _isCapturingStill = false;
+  LivenessStreamFeedback? _streamFeedback;
+
   // -----------------------------------------------------------------------
   // Lifecycle
   // -----------------------------------------------------------------------
@@ -69,6 +79,7 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
 
   @override
   void dispose() {
+    _stopImageStream();
     _cam?.dispose();
     _faceDetector.close();
     _recognizer.dispose();
@@ -123,14 +134,18 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
         front,
         ResolutionPreset.medium,
         enableAudio: false,
+        imageFormatGroup: Platform.isAndroid
+            ? ImageFormatGroup.nv21
+            : ImageFormatGroup.bgra8888,
       );
       await _cam!.initialize();
 
       if (mounted) {
         setState(() {
           _phase = _Phase.capturing;
-          _statusText = 'Position your face in the oval and tap Scan Face';
+          _statusText = 'Position your face in the oval';
         });
+        _startImageStream();
       }
     } catch (e) {
       if (mounted) {
@@ -143,23 +158,145 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
   }
 
   // -----------------------------------------------------------------------
-  // Capture + embedding verification
+  // Real-time Stream Liveness Engine
   // -----------------------------------------------------------------------
 
-  Future<void> _captureAndVerify() async {
+  Future<void> _startImageStream() async {
+    if (_cam == null || !_cam!.value.isInitialized) return;
+    if (_isStreamActive) return;
+    _isStreamActive = true;
+    _livenessDetector.resetStreamState();
+
+    try {
+      await _cam!.startImageStream((CameraImage image) async {
+        if (!_isStreamActive ||
+            _isProcessingFrame ||
+            _isCapturingStill ||
+            _processing) {
+          return;
+        }
+        _isProcessingFrame = true;
+
+        try {
+          final inputImage = LivenessDetector.inputImageFromCameraImage(
+            image: image,
+            camera: _cam!.description,
+          );
+          if (inputImage == null) return;
+
+          final luminance = LivenessDetector.calculateLuminance(image);
+          final faces = await _faceDetector.processImage(inputImage);
+
+          final feedback = _livenessDetector.processStreamFrame(
+            faces: faces,
+            imageWidth: image.width,
+            imageHeight: image.height,
+            luminance: luminance,
+          );
+
+          if (mounted && _phase == _Phase.capturing && !_isCapturingStill) {
+            setState(() {
+              _streamFeedback = feedback;
+              _statusText = feedback.message;
+            });
+
+            // Automatic capture trigger when passive blink is verified!
+            if (feedback.status == LivenessStreamStatus.passed && !_processing) {
+              _onLivenessConfirmed();
+            }
+          }
+        } catch (e) {
+          debugPrint('[FaceVerificationDialog] Stream error: $e');
+        } finally {
+          _isProcessingFrame = false;
+        }
+      });
+    } catch (e) {
+      debugPrint('[FaceVerificationDialog] startImageStream error: $e');
+      _isStreamActive = false;
+    }
+  }
+
+  Future<void> _stopImageStream() async {
+    if (!_isStreamActive) return;
+    _isStreamActive = false;
+    try {
+      if (_cam != null && _cam!.value.isInitialized) {
+        await _cam!.stopImageStream();
+      }
+    } catch (e) {
+      debugPrint('[FaceVerificationDialog] stopImageStream error: $e');
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Capture & Verification Execution
+  // -----------------------------------------------------------------------
+
+  Future<void> _onLivenessConfirmed() async {
+    if (_processing || _isCapturingStill) return;
+    _isCapturingStill = true;
+
+    setState(() {
+      _processing = true;
+      _statusText = '✅ Blink confirmed! Verifying identity…';
+    });
+
+    await _stopImageStream();
+    await Future.delayed(const Duration(milliseconds: 150));
+
+    if (!mounted || _cam == null || !_cam!.value.isInitialized) {
+      _processing = false;
+      _isCapturingStill = false;
+      return;
+    }
+
+    try {
+      final xFile = await _cam!.takePicture();
+      await _verifyPictureFile(xFile, isPassiveBlinkVerified: true);
+    } catch (e) {
+      _handleFailedAttempt('Capture error: ${_short(e)}');
+    } finally {
+      _isCapturingStill = false;
+    }
+  }
+
+  Future<void> _manualCaptureAndVerify() async {
     if (_cam == null || !_cam!.value.isInitialized) return;
     if (_savedEmbeddings == null || _savedEmbeddings!.isEmpty) return;
-    if (_processing) return;
+    if (_processing || _isCapturingStill) return;
 
+    _isCapturingStill = true;
     setState(() {
       _processing = true;
       _statusText = 'Verifying…';
     });
 
+    await _stopImageStream();
+    await Future.delayed(const Duration(milliseconds: 150));
+
+    if (!mounted || _cam == null || !_cam!.value.isInitialized) {
+      _processing = false;
+      _isCapturingStill = false;
+      return;
+    }
+
     try {
       final xFile = await _cam!.takePicture();
-      final bytes = await xFile.readAsBytes();
+      await _verifyPictureFile(xFile, isPassiveBlinkVerified: false);
+    } catch (e) {
+      _handleFailedAttempt('Capture error: ${_short(e)}');
+    } finally {
+      _isCapturingStill = false;
+    }
+  }
 
+  Future<void> _verifyPictureFile(
+    XFile xFile, {
+    required bool isPassiveBlinkVerified,
+  }) async {
+    try {
+      final bytes = await xFile.readAsBytes();
       final inputImage = InputImage.fromFilePath(xFile.path);
       final faces = await _faceDetector.processImage(inputImage);
 
@@ -182,7 +319,7 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
       final fullImage = img.bakeOrientation(rawImage);
       final rect = faces.first.boundingBox;
 
-      // Crop with 20 % padding for robust embeddings
+      // Crop with 20% padding for robust embeddings
       final cropped = FaceRecognizer.cropFace(
         fullImage,
         bboxX: rect.left.toInt(),
@@ -192,7 +329,7 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
         padding: 0.2,
       );
 
-      // Crop face region without padding strictly for lighting checks (ignores background)
+      // Crop face strictly for lighting checks
       final faceOnly = FaceRecognizer.cropFace(
         fullImage,
         bboxX: rect.left.toInt(),
@@ -202,12 +339,11 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
         padding: 0.0,
       );
 
-      // Analyze face lighting (brightness & evenness)
       final lighting = FaceRecognizer.analyzeFaceLighting(faceOnly);
       final avgBrightness = lighting['avg']!;
       final lightingDiff = lighting['diff']!;
 
-      if (avgBrightness < 95.0) {
+      if (avgBrightness < 80.0) {
         _handleFailedAttempt(
           'Too dark (${avgBrightness.toStringAsFixed(0)}/255). Move to a well-lit area.',
         );
@@ -217,7 +353,7 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
         return;
       }
 
-      if (lightingDiff > 65.0) {
+      if (lightingDiff > 75.0) {
         _handleFailedAttempt(
           'Lighting is too uneven. Avoid direct side/backlight.',
         );
@@ -227,11 +363,9 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
         return;
       }
 
-      // --- Passive liveness check ---
-      // No gesture needed — user just looks at the camera.
-      setState(() => _statusText = 'Checking liveness…');
+      // Secondary still-image texture check
       final face = faces.first;
-      final livenessResult = _livenessDetector.check(
+      final stillLiveness = _livenessDetector.check(
         fullImage,
         bboxX: rect.left.toInt(),
         bboxY: rect.top.toInt(),
@@ -243,11 +377,11 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
         headEulerAngleZ: face.headEulerAngleZ,
       );
 
-      if (!livenessResult.isLive) {
+      // If passive blink was not verified in stream (manual tap), require strict still score
+      if (!isPassiveBlinkVerified && !stillLiveness.isLive) {
         _handleFailedAttempt(
-          'Liveness check failed (${livenessResult.spoofType}). '
-          'Live: ${(livenessResult.liveScore * 100).toStringAsFixed(1)}% — '
-          'Please use your real face.',
+          'Liveness check failed (${stillLiveness.spoofType}). '
+          'Please blink naturally at the camera.',
         );
         try {
           await File(xFile.path).delete();
@@ -255,8 +389,8 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
         return;
       }
 
+      // Generate embedding and compare
       final embedding = _recognizer.getEmbedding(cropped);
-
       bool match = false;
       double bestDist = 999.0;
 
@@ -312,6 +446,13 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
         _processing = false;
         _statusText = '$message\nRetries left: $_retriesLeft — try again.';
       });
+
+      // Resume stream after a brief pause
+      Future.delayed(const Duration(milliseconds: 1200), () {
+        if (mounted && _phase == _Phase.capturing && !_processing) {
+          _startImageStream();
+        }
+      });
     }
   }
 
@@ -324,12 +465,41 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
   // Build UI
   // -----------------------------------------------------------------------
 
+  Color _resolveOverlayColor(ColorScheme cs) {
+    if (_matched) return const Color(0xFF16A34A);
+    if (_retriesLeft <= 0) return Colors.red;
+
+    final fb = _streamFeedback;
+    if (fb == null) return Colors.white54;
+
+    switch (fb.status) {
+      case LivenessStreamStatus.passed:
+        return const Color(0xFF16A34A);
+      case LivenessStreamStatus.blinkInProgress:
+        return Colors.cyanAccent;
+      case LivenessStreamStatus.faceReady:
+        return Colors.lightBlueAccent;
+      case LivenessStreamStatus.tooFar:
+      case LivenessStreamStatus.tooClose:
+      case LivenessStreamStatus.lookStraight:
+      case LivenessStreamStatus.tiltHead:
+      case LivenessStreamStatus.offCenter:
+        return Colors.amber;
+      case LivenessStreamStatus.noFace:
+        return Colors.white54;
+      case LivenessStreamStatus.multipleFaces:
+      case LivenessStreamStatus.tooDark:
+      case LivenessStreamStatus.tooBright:
+        return Colors.redAccent;
+      case LivenessStreamStatus.initialising:
+        return Colors.white54;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final overlayColor = _matched
-        ? const Color(0xFF16A34A)
-        : (_retriesLeft <= 0 ? Colors.red : cs.primary);
+    final overlayColor = _resolveOverlayColor(cs);
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -348,8 +518,8 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
       body: _phase == _Phase.initialising
           ? const Center(child: CircularProgressIndicator(color: Colors.white))
           : (_cam == null)
-          ? _buildErrorBody()
-          : _buildCameraBody(overlayColor),
+              ? _buildErrorBody()
+              : _buildCameraBody(overlayColor),
     );
   }
 
@@ -374,6 +544,8 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
   }
 
   Widget _buildCameraBody(Color overlayColor) {
+    final progress = _streamFeedback?.progress ?? 0.0;
+
     return Column(
       children: [
         Expanded(
@@ -384,15 +556,18 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
                 borderRadius: BorderRadius.circular(16),
                 child: CameraPreview(_cam!),
               ),
-              // Oval overlay
+              // Dynamic Oval Overlay with progress arc
               IgnorePointer(
                 child: CustomPaint(
                   size: Size.infinite,
-                  painter: _OvalOverlayPainter(color: overlayColor),
+                  painter: _OvalOverlayPainter(
+                    color: overlayColor,
+                    progress: progress,
+                  ),
                 ),
               ),
 
-              // Status text
+              // Status card with real-time passive detection hint
               Positioned(
                 bottom: 24,
                 left: 24,
@@ -400,20 +575,41 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 16,
-                    vertical: 10,
+                    vertical: 12,
                   ),
                   decoration: BoxDecoration(
-                    color: Colors.black.withAlpha(160),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    _statusText,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
+                    color: Colors.black.withAlpha(180),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: overlayColor.withAlpha(120),
+                      width: 1.5,
                     ),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _statusText,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (_phase == _Phase.capturing && progress > 0.0) ...[
+                        const SizedBox(height: 8),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: progress,
+                            backgroundColor: Colors.white24,
+                            valueColor: AlwaysStoppedAnimation<Color>(overlayColor),
+                            minHeight: 4,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
               ),
@@ -447,23 +643,33 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
           ),
         ),
 
-        // Scan Face button
+        // Optional Manual Scan Button (Fallback)
         Padding(
           padding: const EdgeInsets.all(24),
           child: _phase == _Phase.capturing
-              ? FilledButton.icon(
-                  onPressed: _processing ? null : _captureAndVerify,
-                  icon: _processing
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Icon(Icons.face_rounded),
-                  label: Text(_processing ? 'Verifying…' : 'Scan Face'),
+              ? SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: _processing ? null : _manualCaptureAndVerify,
+                    icon: _processing
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.face_rounded),
+                    label: Text(_processing ? 'Verifying…' : 'Scan Face Manually'),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      textStyle: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
                 )
               : const SizedBox.shrink(),
         ),
@@ -473,12 +679,17 @@ class _FaceVerificationDialogState extends State<FaceVerificationDialog> {
 }
 
 // ---------------------------------------------------------------------------
-// Oval overlay painter (shared style with registration page).
+// Oval overlay painter
 // ---------------------------------------------------------------------------
 
 class _OvalOverlayPainter extends CustomPainter {
-  _OvalOverlayPainter({required this.color});
+  _OvalOverlayPainter({
+    required this.color,
+    this.progress = 0.0,
+  });
+
   final Color color;
+  final double progress;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -489,7 +700,8 @@ class _OvalOverlayPainter extends CustomPainter {
       height: size.height * 0.52,
     );
 
-    final bgPaint = Paint()..color = Colors.black.withAlpha(120);
+    // Dimmed background
+    final bgPaint = Paint()..color = Colors.black.withAlpha(130);
     final ovalPath = Path()..addOval(ovalRect);
     final bgPath = Path()
       ..addRect(rect)
@@ -497,13 +709,28 @@ class _OvalOverlayPainter extends CustomPainter {
     bgPath.fillType = PathFillType.evenOdd;
     canvas.drawPath(bgPath, bgPaint);
 
+    // Main oval border
     final borderPaint = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3;
+      ..strokeWidth = 3.5;
     canvas.drawOval(ovalRect, borderPaint);
+
+    // Progress arc around the oval
+    if (progress > 0.0 && progress < 1.0) {
+      final progressPaint = Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4.5
+        ..strokeCap = StrokeCap.round;
+
+      // Draw arc sweeping around oval
+      final sweepAngle = 2 * pi * progress;
+      canvas.drawArc(ovalRect, -pi / 2, sweepAngle, false, progressPaint);
+    }
   }
 
   @override
-  bool shouldRepaint(covariant _OvalOverlayPainter old) => old.color != color;
+  bool shouldRepaint(covariant _OvalOverlayPainter old) =>
+      old.color != color || old.progress != progress;
 }

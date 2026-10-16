@@ -15,10 +15,14 @@ import 'ml/liveness_detector.dart';
 /// Returns `true` if the server accepted it, `false` or throws on failure.
 typedef EmbeddingUploader = Future<bool> Function(List<double> embedding);
 
-/// Full-screen page for registering a student's face.
+/// Full-screen page for registering a student's face using passive liveness
+/// detection.
 ///
-/// Opens the front camera, shows an oval guide, and once a single face is
-/// detected and captured, generates the embedding, uploads it, and saves it locally.
+/// Features:
+/// - Real-time camera stream analysis (distance, orientation, lighting).
+/// - Passive natural blink state machine (no gestures needed).
+/// - Automatic capture upon completed blink cycle.
+/// - Uploads 192-d embedding to backend and caches locally upon confirmation.
 class FaceRegistrationPage extends StatefulWidget {
   const FaceRegistrationPage({super.key, required this.onUpload});
 
@@ -32,10 +36,10 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   CameraController? _cameraController;
   final FaceDetector _faceDetector = FaceDetector(
     options: FaceDetectorOptions(
-      performanceMode: FaceDetectorMode.accurate,
+      performanceMode: FaceDetectorMode.fast,
       enableClassification: true,
       enableLandmarks: true,
-      minFaceSize: 0.3,
+      minFaceSize: 0.25,
     ),
   );
   final FaceRecognizer _recognizer = FaceRecognizer();
@@ -46,6 +50,12 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
   bool _processing = false;
   String _statusText = 'Position your face in the oval';
   bool _success = false;
+
+  // Stream state
+  bool _isStreamActive = false;
+  bool _isProcessingFrame = false;
+  bool _isCapturingStill = false;
+  LivenessStreamFeedback? _streamFeedback;
 
   @override
   void initState() {
@@ -80,7 +90,11 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
             : ImageFormatGroup.bgra8888,
       );
       await _cameraController!.initialize();
-      if (mounted) setState(() => _initialising = false);
+
+      if (mounted) {
+        setState(() => _initialising = false);
+        _startImageStream();
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -93,6 +107,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
 
   @override
   void dispose() {
+    _stopImageStream();
     _cameraController?.dispose();
     _faceDetector.close();
     _recognizer.dispose();
@@ -100,22 +115,166 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     super.dispose();
   }
 
-  Future<void> _capture() async {
+  // -----------------------------------------------------------------------
+  // Real-time Stream Liveness Engine
+  // -----------------------------------------------------------------------
+
+  Future<void> _startImageStream() async {
+    if (_cameraController == null || !_cameraController!.value.isInitialized) {
+      return;
+    }
+    if (_isStreamActive) return;
+    _isStreamActive = true;
+    _livenessDetector.resetStreamState();
+
+    try {
+      await _cameraController!.startImageStream((CameraImage image) async {
+        if (!_isStreamActive ||
+            _isProcessingFrame ||
+            _isCapturingStill ||
+            _processing ||
+            _success) {
+          return;
+        }
+        _isProcessingFrame = true;
+
+        try {
+          final inputImage = LivenessDetector.inputImageFromCameraImage(
+            image: image,
+            camera: _cameraController!.description,
+          );
+          if (inputImage == null) return;
+
+          final luminance = LivenessDetector.calculateLuminance(image);
+          final faces = await _faceDetector.processImage(inputImage);
+
+          final feedback = _livenessDetector.processStreamFrame(
+            faces: faces,
+            imageWidth: image.width,
+            imageHeight: image.height,
+            luminance: luminance,
+          );
+
+          if (mounted && !_isCapturingStill && !_success) {
+            setState(() {
+              _streamFeedback = feedback;
+              _statusText = feedback.message;
+            });
+
+            // Automatic registration capture on natural blink!
+            if (feedback.status == LivenessStreamStatus.passed && !_processing) {
+              _onPassiveBlinkConfirmed();
+            }
+          }
+        } catch (e) {
+          debugPrint('[FaceRegistrationPage] Stream frame error: $e');
+        } finally {
+          _isProcessingFrame = false;
+        }
+      });
+    } catch (e) {
+      debugPrint('[FaceRegistrationPage] startImageStream error: $e');
+      _isStreamActive = false;
+    }
+  }
+
+  Future<void> _stopImageStream() async {
+    if (!_isStreamActive) return;
+    _isStreamActive = false;
+    try {
+      if (_cameraController != null &&
+          _cameraController!.value.isInitialized) {
+        await _cameraController!.stopImageStream();
+      }
+    } catch (e) {
+      debugPrint('[FaceRegistrationPage] stopImageStream error: $e');
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Capture & Registration Flow
+  // -----------------------------------------------------------------------
+
+  Future<void> _onPassiveBlinkConfirmed() async {
+    if (_processing || _isCapturingStill || _success) return;
+    _isCapturingStill = true;
+
+    setState(() {
+      _processing = true;
+      _statusText = '✅ Blink confirmed! Capturing face profile…';
+    });
+
+    await _stopImageStream();
+    await Future.delayed(const Duration(milliseconds: 150));
+
+    if (!mounted ||
+        _cameraController == null ||
+        !_cameraController!.value.isInitialized) {
+      _processing = false;
+      _isCapturingStill = false;
+      return;
+    }
+
+    try {
+      final xFile = await _cameraController!.takePicture();
+      await _processRegistrationPicture(xFile, isPassiveBlinkVerified: true);
+    } catch (e) {
+      setState(() {
+        _statusText = 'Capture error: ${_shortError(e)}';
+        _processing = false;
+      });
+      _resumeStreamDelayed();
+    } finally {
+      _isCapturingStill = false;
+    }
+  }
+
+  Future<void> _manualCapture() async {
     if (_processing ||
+        _isCapturingStill ||
+        _success ||
         _cameraController == null ||
         !_cameraController!.value.isInitialized) {
       return;
     }
+
+    _isCapturingStill = true;
     setState(() {
       _processing = true;
       _statusText = 'Detecting face…';
     });
 
+    await _stopImageStream();
+    await Future.delayed(const Duration(milliseconds: 150));
+
+    if (!mounted ||
+        _cameraController == null ||
+        !_cameraController!.value.isInitialized) {
+      _processing = false;
+      _isCapturingStill = false;
+      return;
+    }
+
     try {
       final xFile = await _cameraController!.takePicture();
-      final bytes = await xFile.readAsBytes();
+      await _processRegistrationPicture(xFile, isPassiveBlinkVerified: false);
+    } catch (e) {
+      setState(() {
+        _statusText = 'Capture error: ${_shortError(e)}';
+        _processing = false;
+      });
+      _resumeStreamDelayed();
+    } finally {
+      _isCapturingStill = false;
+    }
+  }
 
-      // Detect faces with ML Kit
+  Future<void> _processRegistrationPicture(
+    XFile xFile, {
+    required bool isPassiveBlinkVerified,
+  }) async {
+    try {
+      final bytes = await xFile.readAsBytes();
       final inputImage = InputImage.fromFilePath(xFile.path);
       final faces = await _faceDetector.processImage(inputImage);
 
@@ -124,6 +283,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
           _statusText = 'No face detected. Try again.';
           _processing = false;
         });
+        _resumeStreamDelayed();
         return;
       }
       if (faces.length > 1) {
@@ -131,26 +291,24 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
           _statusText = 'Multiple faces detected. Only one face allowed.';
           _processing = false;
         });
+        _resumeStreamDelayed();
         return;
       }
 
-      setState(() => _statusText = 'Processing face…');
-
-      // Decode + auto-orient (applies EXIF rotation so bounding box coords match)
       final rawImage = img.decodeImage(bytes);
       if (rawImage == null) {
         setState(() {
           _statusText = 'Failed to process image. Try again.';
           _processing = false;
         });
+        _resumeStreamDelayed();
         return;
       }
       final fullImage = img.bakeOrientation(rawImage);
-
       final face = faces.first;
       final rect = face.boundingBox;
 
-      // Crop with 20% padding for robust embeddings (matches verification)
+      // Crop with 20% padding for robust embeddings
       final cropped = FaceRecognizer.cropFace(
         fullImage,
         bboxX: rect.left.toInt(),
@@ -160,7 +318,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         padding: 0.2,
       );
 
-      // Crop face region without padding strictly for lighting checks (ignores background)
+      // Analyze face lighting
       final faceOnly = FaceRecognizer.cropFace(
         fullImage,
         bboxX: rect.left.toInt(),
@@ -170,39 +328,33 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         padding: 0.0,
       );
 
-      // Analyze face lighting (brightness & evenness)
       final lighting = FaceRecognizer.analyzeFaceLighting(faceOnly);
       final avgBrightness = lighting['avg']!;
 
-      if (avgBrightness < 95.0) {
-        if (mounted) {
-          await showDialog(
-            context: context,
-            barrierDismissible: false,
-            builder: (ctx) => AlertDialog(
-              title: const Text(
-                'Low Light Warning',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              content: const Text(
-                'IF You are registering in low light. You may face issues during attendance verification. so keep your face in light',
-              ),
-              actions: [
-                FilledButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('OK'),
-                ),
-              ],
+      if (avgBrightness < 80.0 && mounted) {
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            title: const Text(
+              'Low Light Warning',
+              style: TextStyle(fontWeight: FontWeight.bold),
             ),
-          );
-        }
+            content: const Text(
+              'You are registering in low light. This may cause issues during attendance verification. Please keep your face well-lit.',
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
       }
 
-      // --- Passive liveness check ---
-      // Ensures the person is physically present — blocks printed photos and
-      // screen replays at registration time so a fake face can never be enrolled.
-      setState(() => _statusText = 'Checking liveness…');
-      final livenessResult = _livenessDetector.check(
+      // Secondary liveness check
+      final stillLiveness = _livenessDetector.check(
         fullImage,
         bboxX: rect.left.toInt(),
         bboxY: rect.top.toInt(),
@@ -214,22 +366,22 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         headEulerAngleZ: face.headEulerAngleZ,
       );
 
-      if (!livenessResult.isLive) {
+      if (!isPassiveBlinkVerified && !stillLiveness.isLive) {
         setState(() {
           _statusText =
-              'Liveness check failed (${livenessResult.spoofType}). '
-              'Live: ${(livenessResult.liveScore * 100).toStringAsFixed(1)}% — '
-              'Please use your real face.';
+              'Liveness check failed (${stillLiveness.spoofType}). '
+              'Please blink naturally at the camera.';
           _processing = false;
         });
+        _resumeStreamDelayed();
         return;
       }
 
-      // Generate embedding (includes preprocessing)
+      // Generate embedding
+      setState(() => _statusText = 'Generating biometric embedding…');
       final embedding = _recognizer.getEmbedding(cropped);
 
-      // Upload to server first. Registration/re-registration is intentionally
-      // online so the DB remains the source of truth for future logins.
+      // Upload to server
       setState(() => _statusText = 'Uploading to server…');
       try {
         final ok = await widget.onUpload(embedding);
@@ -238,6 +390,7 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
             _statusText = 'Server rejected the registration. Try again.';
             _processing = false;
           });
+          _resumeStreamDelayed();
           return;
         }
       } catch (e) {
@@ -245,12 +398,12 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
           _statusText = 'Upload failed: ${_shortError(e)}';
           _processing = false;
         });
+        _resumeStreamDelayed();
         return;
       }
 
-      setState(() => _statusText = 'Saving face profile…');
-
-      // Save locally only after server confirms.
+      // Save locally
+      setState(() => _statusText = 'Saving face profile locally…');
       final embStr = await _storage.read(key: 'face_embedding');
       List<List<double>> embeddingsList = [];
       if (embStr != null) {
@@ -273,7 +426,6 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       );
       await _storage.write(key: 'face_registered', value: 'true');
 
-      // Clean up the temp photo file
       try {
         await File(xFile.path).delete();
       } catch (_) {}
@@ -291,7 +443,16 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
         _statusText = 'Error: ${_shortError(e)}';
         _processing = false;
       });
+      _resumeStreamDelayed();
     }
+  }
+
+  void _resumeStreamDelayed() {
+    Future.delayed(const Duration(milliseconds: 1200), () {
+      if (mounted && !_success && !_processing) {
+        _startImageStream();
+      }
+    });
   }
 
   String _shortError(Object e) {
@@ -306,9 +467,42 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
     return s.length > 60 ? s.substring(0, 60) : s;
   }
 
+  Color _resolveOverlayColor(ColorScheme cs) {
+    if (_success) return const Color(0xFF16A34A);
+
+    final fb = _streamFeedback;
+    if (fb == null) return Colors.white54;
+
+    switch (fb.status) {
+      case LivenessStreamStatus.passed:
+        return const Color(0xFF16A34A);
+      case LivenessStreamStatus.blinkInProgress:
+        return Colors.cyanAccent;
+      case LivenessStreamStatus.faceReady:
+        return Colors.lightBlueAccent;
+      case LivenessStreamStatus.tooFar:
+      case LivenessStreamStatus.tooClose:
+      case LivenessStreamStatus.lookStraight:
+      case LivenessStreamStatus.tiltHead:
+      case LivenessStreamStatus.offCenter:
+        return Colors.amber;
+      case LivenessStreamStatus.noFace:
+        return Colors.white54;
+      case LivenessStreamStatus.multipleFaces:
+      case LivenessStreamStatus.tooDark:
+      case LivenessStreamStatus.tooBright:
+        return Colors.redAccent;
+      case LivenessStreamStatus.initialising:
+        return Colors.white54;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final overlayColor = _resolveOverlayColor(cs);
+    final progress = _streamFeedback?.progress ?? 0.0;
+
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -322,140 +516,168 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
       body: _initialising
           ? const Center(child: CircularProgressIndicator(color: Colors.white))
           : (_cameraController == null)
-          ? Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Text(
-                  _statusText,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white, fontSize: 15),
-                ),
-              ),
-            )
-          : Column(
-              children: [
-                Expanded(
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      // Camera preview
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(16),
-                        child: CameraPreview(_cameraController!),
-                      ),
-                      // Instruction card overlay at the top
-                      Positioned(
-                        top: 24,
-                        left: 24,
-                        right: 24,
-                        child: Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withAlpha(160),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.white24),
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(
+                      _statusText,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white, fontSize: 15),
+                    ),
+                  ),
+                )
+              : Column(
+                  children: [
+                    Expanded(
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(16),
+                            child: CameraPreview(_cameraController!),
                           ),
-                          child: const Row(
-                            children: [
-                              Icon(
-                                Icons.wb_sunny_rounded,
-                                color: Colors.amber,
-                                size: 20,
+                          // Top lighting guideline card
+                          Positioned(
+                            top: 24,
+                            left: 24,
+                            right: 24,
+                            child: Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withAlpha(160),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.white24),
                               ),
-                              SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  'Keep your face in the oval under good light intensity.',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w500,
+                              child: const Row(
+                                children: [
+                                  Icon(
+                                    Icons.wb_sunny_rounded,
+                                    color: Colors.amber,
+                                    size: 20,
                                   ),
+                                  SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      'Position face in oval and blink naturally to register.',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+
+                          // Dynamic Oval Guide Overlay
+                          IgnorePointer(
+                            child: CustomPaint(
+                              size: Size.infinite,
+                              painter: _OvalOverlayPainter(
+                                color: overlayColor,
+                                progress: progress,
+                              ),
+                            ),
+                          ),
+
+                          // Bottom status card with progress bar
+                          Positioned(
+                            bottom: 24,
+                            left: 24,
+                            right: 24,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 12,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withAlpha(180),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: overlayColor.withAlpha(120),
+                                  width: 1.5,
                                 ),
                               ),
-                            ],
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    _statusText,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  if (!_success && progress > 0.0) ...[
+                                    const SizedBox(height: 8),
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(4),
+                                      child: LinearProgressIndicator(
+                                        value: progress,
+                                        backgroundColor: Colors.white24,
+                                        valueColor: AlwaysStoppedAnimation<Color>(
+                                          overlayColor,
+                                        ),
+                                        minHeight: 4,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
                           ),
-                        ),
+                        ],
                       ),
-                      // Oval guide overlay
-                      IgnorePointer(
-                        child: CustomPaint(
-                          size: Size.infinite,
-                          painter: _OvalOverlayPainter(
-                            success: _success,
-                            color: _success
-                                ? const Color(0xFF16A34A)
-                                : cs.primary,
+                    ),
+
+                    // Manual Capture Button (Fallback)
+                    Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          onPressed: _processing || _success ? null : _manualCapture,
+                          icon: _processing
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.camera_alt_rounded),
+                          label: Text(
+                            _processing ? 'Processing…' : 'Capture Face Manually',
                           ),
-                        ),
-                      ),
-                      // Status text at the bottom of the preview
-                      Positioned(
-                        bottom: 24,
-                        left: 24,
-                        right: 24,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 10,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withAlpha(160),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            _statusText,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            textStyle: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
                         ),
                       ),
-                    ],
-                  ),
-                ),
-                // Capture button
-                Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: _processing || _success ? null : _capture,
-                      icon: _processing
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Icon(Icons.camera_alt_rounded),
-                      label: Text(_processing ? 'Processing…' : 'Capture Face'),
-                      style: FilledButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        textStyle: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
                     ),
-                  ),
+                  ],
                 ),
-              ],
-            ),
     );
   }
 }
 
-/// Draws a semi-transparent overlay with an oval cutout in the centre.
 class _OvalOverlayPainter extends CustomPainter {
-  _OvalOverlayPainter({required this.success, required this.color});
-  final bool success;
+  _OvalOverlayPainter({
+    required this.color,
+    this.progress = 0.0,
+  });
+
   final Color color;
+  final double progress;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -466,8 +688,7 @@ class _OvalOverlayPainter extends CustomPainter {
       height: size.height * 0.52,
     );
 
-    // Semi-transparent background
-    final bgPaint = Paint()..color = Colors.black.withAlpha(120);
+    final bgPaint = Paint()..color = Colors.black.withAlpha(130);
     final ovalPath = Path()..addOval(ovalRect);
     final bgPath = Path()
       ..addRect(rect)
@@ -475,15 +696,25 @@ class _OvalOverlayPainter extends CustomPainter {
     bgPath.fillType = PathFillType.evenOdd;
     canvas.drawPath(bgPath, bgPaint);
 
-    // Oval border
     final borderPaint = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3;
+      ..strokeWidth = 3.5;
     canvas.drawOval(ovalRect, borderPaint);
+
+    if (progress > 0.0 && progress < 1.0) {
+      final progressPaint = Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4.5
+        ..strokeCap = StrokeCap.round;
+
+      final sweepAngle = 2 * pi * progress;
+      canvas.drawArc(ovalRect, -pi / 2, sweepAngle, false, progressPaint);
+    }
   }
 
   @override
   bool shouldRepaint(covariant _OvalOverlayPainter old) =>
-      old.success != success || old.color != color;
+      old.color != color || old.progress != progress;
 }
