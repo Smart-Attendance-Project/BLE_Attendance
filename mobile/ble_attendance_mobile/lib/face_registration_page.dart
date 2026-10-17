@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:camera/camera.dart';
 import 'package:dio/dio.dart';
@@ -536,34 +537,55 @@ class _FaceRegistrationPageState extends State<FaceRegistrationPage> {
                             borderRadius: BorderRadius.circular(16),
                             child: CameraPreview(_cameraController!),
                           ),
-                          // Top lighting guideline card
+                          // Top blinking instruction card
                           Positioned(
                             top: 24,
                             left: 24,
                             right: 24,
                             child: Container(
-                              padding: const EdgeInsets.all(12),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 10,
+                              ),
                               decoration: BoxDecoration(
-                                color: Colors.black.withAlpha(160),
+                                color: Colors.black.withAlpha(190),
                                 borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: Colors.white24),
+                                border: Border.all(
+                                  color: Colors.amber.withAlpha(180),
+                                  width: 1.2,
+                                ),
                               ),
                               child: const Row(
                                 children: [
                                   Icon(
-                                    Icons.wb_sunny_rounded,
+                                    Icons.remove_red_eye_rounded,
                                     color: Colors.amber,
-                                    size: 20,
+                                    size: 22,
                                   ),
                                   SizedBox(width: 10),
                                   Expanded(
-                                    child: Text(
-                                      'Position face in oval and blink naturally to register.',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w500,
-                                      ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          'Blink Eyes to Register',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                        SizedBox(height: 2),
+                                        Text(
+                                          'Align in oval & BLINK naturally to capture automatically.',
+                                          style: TextStyle(
+                                            color: Colors.white70,
+                                            fontSize: 11,
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 ],

@@ -291,7 +291,7 @@ class LivenessDetector {
 
         return LivenessStreamFeedback(
           status: LivenessStreamStatus.faceReady,
-          message: 'Blink naturally to verify',
+          message: '👁️ Please BLINK your eyes now',
           progress: 0.5,
           isLive: false,
           face: face,
@@ -309,7 +309,7 @@ class LivenessDetector {
 
           return LivenessStreamFeedback(
             status: LivenessStreamStatus.blinkInProgress,
-            message: 'Blink detected…',
+            message: '✨ Blink detected! Reopening…',
             progress: 0.8,
             isLive: false,
             face: face,
@@ -322,7 +322,7 @@ class LivenessDetector {
         // If eyes remain open, keep prompting naturally
         return LivenessStreamFeedback(
           status: LivenessStreamStatus.faceReady,
-          message: 'Blink naturally to verify',
+          message: '👁️ Please BLINK your eyes now',
           progress: 0.6,
           isLive: false,
           face: face,
