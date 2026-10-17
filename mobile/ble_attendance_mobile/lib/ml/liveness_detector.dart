@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
+import 'package:tflite_flutter/tflite_flutter.dart';
 
 /// Status states for real-time passive stream liveness detection.
 enum LivenessStreamStatus {
@@ -94,6 +95,9 @@ class LivenessResult {
 class LivenessDetector {
   final double liveThreshold;
 
+  // Neural network anti-spoofing model interpreter (silentface.tflite / MiniFASNet)
+  Interpreter? _interpreter;
+
   // Blink state machine variables
   int _blinkState = 0; // 0: wait open, 1: wait close, 2: wait reopen, 3: passed
   int _openEyeFrames = 0;
@@ -104,11 +108,21 @@ class LivenessDetector {
 
   Future<void> init() async {
     resetStreamState();
-    debugPrint('[LivenessDetector] Initialised (Passive Blink + Image Analysis)');
+    try {
+      _interpreter = await Interpreter.fromAsset('assets/silentface.tflite');
+      debugPrint('[LivenessDetector] Loaded silentface.tflite neural network model');
+    } catch (e) {
+      debugPrint(
+        '[LivenessDetector] Could not load silentface.tflite: $e (using multi-signal fallback)',
+      );
+      _interpreter = null;
+    }
   }
 
   void dispose() {
     resetStreamState();
+    _interpreter?.close();
+    _interpreter = null;
   }
 
   /// Reset the streaming state machine (e.g. when dialog opens or retry begins).
@@ -551,15 +565,89 @@ class LivenessDetector {
       weightedScore += w * poseScore;
     }
 
-    final liveScore = totalWeight > 0 ? weightedScore / totalWeight : 0.0;
+    // --- 1. TFLite Neural Network Anti-Spoofing Inference (silentface.tflite) ---
+    double? nnLiveScore;
+    double? nnPrintScore;
+    double? nnReplayScore;
+
+    if (_interpreter != null) {
+      try {
+        const double cropScale = 2.7;
+        final cx = bboxX + bboxW / 2.0;
+        final cy = bboxY + bboxH / 2.0;
+        final halfW = (bboxW * cropScale / 2.0).ceil();
+        final halfH = (bboxH * cropScale / 2.0).ceil();
+
+        final x = (cx - halfW).round().clamp(0, fullImage.width - 1);
+        final y = (cy - halfH).round().clamp(0, fullImage.height - 1);
+        final w = (cx + halfW).round().clamp(x + 1, fullImage.width) - x;
+        final h = (cy + halfH).round().clamp(y + 1, fullImage.height) - y;
+
+        final nnCrop = img.copyCrop(fullImage, x: x, y: y, width: w, height: h);
+        final nnResized = img.copyResize(
+          nnCrop,
+          width: 80,
+          height: 80,
+          interpolation: img.Interpolation.linear,
+        );
+
+        final input = Float32List(1 * 3 * 80 * 80);
+        for (int row = 0; row < 80; row++) {
+          for (int col = 0; col < 80; col++) {
+            final p = nnResized.getPixel(col, row);
+            final r = p.r.toDouble() / 255.0;
+            final g = p.g.toDouble() / 255.0;
+            final b = p.b.toDouble() / 255.0;
+
+            final base = row * 80 + col;
+            input[0 * 80 * 80 + base] = b; // B
+            input[1 * 80 * 80 + base] = g; // G
+            input[2 * 80 * 80 + base] = r; // R
+          }
+        }
+
+        final inputTensor = input.reshape([1, 3, 80, 80]);
+        final output = List.filled(1 * 3, 0.0).reshape([1, 3]);
+        _interpreter!.run(inputTensor, output);
+
+        final scores = List<double>.from(output[0] as List);
+        nnPrintScore = scores[0];
+        nnLiveScore = scores[1];
+        nnReplayScore = scores[2];
+        debugPrint(
+          '[LivenessDetector] TFLite NN scores: print=${scores[0].toStringAsFixed(4)}, '
+          'live=${scores[1].toStringAsFixed(4)}, replay=${scores[2].toStringAsFixed(4)}',
+        );
+      } catch (e) {
+        debugPrint('[LivenessDetector] TFLite NN inference error: $e');
+      }
+    }
+
+    final textureLiveScore = totalWeight > 0 ? weightedScore / totalWeight : 0.0;
+
+    double liveScore;
+    double spoofPrintScore;
+    double spoofReplayScore;
+
+    if (nnLiveScore != null) {
+      // Blend Deep Learning score (60%) with Multi-Signal Texture score (40%)
+      liveScore = 0.60 * nnLiveScore + 0.40 * textureLiveScore;
+      spoofPrintScore = nnPrintScore ?? ((1.0 - liveScore) * 0.5);
+      spoofReplayScore = nnReplayScore ?? ((1.0 - liveScore) * 0.5);
+    } else {
+      liveScore = textureLiveScore;
+      final spoofTotal = (1.0 - liveScore);
+      spoofPrintScore = spoofTotal * 0.5;
+      spoofReplayScore = spoofTotal * 0.5;
+    }
+
     final isLive = liveScore >= liveThreshold;
-    final spoofTotal = isLive ? 0.0 : (1.0 - liveScore);
 
     return LivenessResult(
       isLive: isLive,
       liveScore: liveScore,
-      spoofPrintScore: spoofTotal * 0.5,
-      spoofReplayScore: spoofTotal * 0.5,
+      spoofPrintScore: spoofPrintScore,
+      spoofReplayScore: spoofReplayScore,
     );
   }
 
