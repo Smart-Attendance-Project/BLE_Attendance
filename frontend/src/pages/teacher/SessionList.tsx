@@ -30,11 +30,16 @@ export default function SessionList() {
     refetchInterval: 30_000,
   })
 
+  const selectedSessionData = sessions.find((s: any) => s.id === selectedSession)
+  const editable = selectedSessionData ? isEditable(selectedSessionData) : false
+  const isSessionActive = selectedSessionData?.is_active ?? false
+
   const { data: summary } = useQuery({
     queryKey: ['summary', selectedSession],
     queryFn: () => getAttendanceSummary(selectedSession!),
     enabled: !!selectedSession,
-    refetchInterval: 15_000,
+    refetchInterval: isSessionActive ? 15_000 : false,
+    staleTime: 10_000,
   })
 
   const overrideMut = useMutation({
@@ -45,9 +50,6 @@ export default function SessionList() {
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['summary', selectedSession] }),
   })
-
-  const selectedSessionData = sessions.find((s: any) => s.id === selectedSession)
-  const editable = selectedSessionData ? isEditable(selectedSessionData) : false
 
   const assignmentsBySubject = assignments.reduce((acc: any, a: any) => {
     const key = a.subject_code

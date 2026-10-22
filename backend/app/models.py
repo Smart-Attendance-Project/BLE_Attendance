@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     Boolean, Date, DateTime, Enum as SqlEnum, Float, ForeignKey,
-    Integer, JSON, String, Time, UniqueConstraint,
+    Index, Integer, JSON, String, Time, UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -21,9 +21,9 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    student_id: Mapped[str | None] = mapped_column(String(16), unique=True, nullable=True)
-    teacher_id: Mapped[str | None] = mapped_column(String(16), unique=True, nullable=True)
-    admin_id: Mapped[str | None] = mapped_column(String(16), unique=True, nullable=True)
+    student_id: Mapped[str | None] = mapped_column(String(16), unique=True, nullable=True, index=True)
+    teacher_id: Mapped[str | None] = mapped_column(String(16), unique=True, nullable=True, index=True)
+    admin_id: Mapped[str | None] = mapped_column(String(16), unique=True, nullable=True, index=True)
     full_name: Mapped[str] = mapped_column(String(120), nullable=False)
     role: Mapped[UserRole] = mapped_column(SqlEnum(UserRole), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -105,7 +105,11 @@ class TeacherAssignment(Base):
     division: Mapped["Division"] = relationship()
     batch: Mapped["Batch | None"] = relationship()
 
-    __table_args__ = (UniqueConstraint("teacher_user_id", "subject_id", "division_id", "batch_id"),)
+    __table_args__ = (
+        UniqueConstraint("teacher_user_id", "subject_id", "division_id", "batch_id"),
+        Index("idx_ta_teacher", "teacher_user_id"),
+        Index("idx_ta_division", "division_id"),
+    )
 
 
 class ScheduleSlot(Base):
@@ -122,6 +126,11 @@ class ScheduleSlot(Base):
     assignment: Mapped["TeacherAssignment"] = relationship()
     semester: Mapped["Semester"] = relationship()
 
+    __table_args__ = (
+        Index("idx_slots_day_sem", "day_of_week", "semester_id"),
+        Index("idx_slots_assignment", "assignment_id"),
+    )
+
 
 class DivisionStudent(Base):
     """Enrolment: which division (and optionally batch) a student belongs to."""
@@ -132,7 +141,11 @@ class DivisionStudent(Base):
     division_id: Mapped[int] = mapped_column(Integer, ForeignKey("divisions.id"), nullable=False)
     batch_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("batches.id"), nullable=True)
 
-    __table_args__ = (UniqueConstraint("student_user_id", "division_id"),)
+    __table_args__ = (
+        UniqueConstraint("student_user_id", "division_id"),
+        Index("idx_div_student_division", "division_id", "batch_id"),
+        Index("idx_div_student_user", "student_user_id"),
+    )
 
 
 # ── original models (kept, Session enriched) ──────────────────────────────────
@@ -154,6 +167,11 @@ class Session(Base):
     detections: Mapped[list["Detection"]] = relationship(back_populates="session")
     assignment: Mapped["TeacherAssignment | None"] = relationship()
 
+    __table_args__ = (
+        Index("idx_sessions_teacher_starts", "teacher_user_id", "starts_at"),
+        Index("idx_sessions_assignment", "assignment_id"),
+    )
+
 
 class Detection(Base):
     __tablename__ = "detections"
@@ -167,10 +185,14 @@ class Detection(Base):
 
     session: Mapped[Session] = relationship(back_populates="detections")
 
+    __table_args__ = (
+        Index("idx_detections_session_student", "session_id", "student_user_id"),
+        Index("idx_detections_session_proximity", "session_id", "proximity_ok"),
+    )
+
 
 class Attendance(Base):
     __tablename__ = "attendance"
-    __table_args__ = (UniqueConstraint("session_id", "student_user_id", name="uq_attendance_session_student"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[str] = mapped_column(String(36), ForeignKey("sessions.id"), nullable=False)
@@ -181,3 +203,8 @@ class Attendance(Base):
     overridden_by_teacher: Mapped[bool] = mapped_column(Boolean, default=False)
     override_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     finalized_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "student_user_id", name="uq_attendance_session_student"),
+        Index("idx_attendance_session", "session_id"),
+    )
