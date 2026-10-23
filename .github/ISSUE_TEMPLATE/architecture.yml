@@ -1,5 +1,6 @@
-name: "🏗️ Architecture / Design"
+name: "Architecture / Design"
 description: "Propose a system design change or discuss technical debt"
+title: "arch: "
 labels: ["architecture"]
 body:
   - type: markdown

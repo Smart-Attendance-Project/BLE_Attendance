@@ -1,5 +1,6 @@
-name: "✨ Feature Request"
+name: "Feature Request"
 description: "Propose a new feature or enhancement"
+title: "feat: "
 labels: ["enhancement"]
 body:
   - type: markdown
