@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "💬 General Question / Discussion"
+    url: https://github.com/Smart-Attendance-Project/BLE_Attendance/discussions
+    about: "Ask questions or start a discussion instead of opening an issue."

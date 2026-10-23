@@ -1,0 +1,51 @@
+name: "🏗️ Architecture / Design"
+description: "Propose a system design change or discuss technical debt"
+labels: ["architecture"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Architecture / Design Discussion
+        Use this for system-level design proposals, refactoring, or technical debt.
+
+  - type: textarea
+    id: overview
+    attributes:
+      label: "Overview"
+      description: "Describe the architectural change or technical debt."
+    validations:
+      required: true
+
+  - type: textarea
+    id: current-state
+    attributes:
+      label: "Current State"
+      description: "How does the system currently work? What's the problem?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-design
+    attributes:
+      label: "Proposed Design"
+      description: "Describe the new architecture or approach."
+    validations:
+      required: true
+
+  - type: textarea
+    id: tradeoffs
+    attributes:
+      label: "Trade-offs & Edge Cases"
+      description: "What are the risks, trade-offs, or edge cases?"
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: "Acceptance Criteria"
+      placeholder: |
+        - [ ] Criteria 1
+        - [ ] Criteria 2
+    validations:
+      required: true
