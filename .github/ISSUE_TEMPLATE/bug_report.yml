@@ -1,37 +1,28 @@
-name: "Bug Report"
-description: "Report a bug or unexpected behavior"
+name: Bug report
+description: Report a reproducible bug
 title: "bug: "
-labels: ["bug"]
+labels:
+  - bug
 body:
-  - type: markdown
+  - type: textarea
+    id: description
     attributes:
-      value: |
-        ## Bug Report
-        Thanks for taking the time to report a bug! Please fill in the details below.
-
-- type: textarea
-    id: Description 
-    attributes:
-      label: "Description "
-      description: "Describe the architectural change or technical debt."
+      label: Description
+      description: Clear description of the bug and steps to reproduce.
     validations:
       required: true
-
-
   - type: textarea
-    id: proposed-design
+    id: proposed-solution
     attributes:
-      label: "Proposed Design"
-      description: "Describe the new architecture or approach."
+      label: Proposed Solution
+      description: Suggested fix or proposed solution (if any).
     validations:
-      required: true
-
-  
-
+      required: false
   - type: textarea
-    id: acceptance
+    id: acceptance-criteria
     attributes:
-      label: "Acceptance Criteria"
+      label: Acceptance criteria
+      description: What needs to be verified for this bug to be considered resolved?
       placeholder: |
         - [ ] Criteria 1
         - [ ] Criteria 2

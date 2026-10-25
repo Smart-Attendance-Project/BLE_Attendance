@@ -1,37 +1,28 @@
-name: "Architecture / Design"
-description: "Propose a system design change or discuss technical debt"
+name: Architecture proposal
+description: Propose a system design change or discuss technical debt
 title: "arch: "
-labels: ["architecture"]
+labels:
+  - architecture
 body:
-  - type: markdown
-    attributes:
-      value: |
-        ## Architecture / Design Discussion
-        Use this for system-level design proposals, refactoring, or technical debt.
-
   - type: textarea
-    id: Description 
+    id: description
     attributes:
-      label: "Description "
-      description: "Describe the architectural change or technical debt."
+      label: Description
+      description: Describe the technical debt, architectural challenge, or context.
     validations:
       required: true
-
-
   - type: textarea
-    id: proposed-design
+    id: proposed-solution
     attributes:
-      label: "Proposed Design"
-      description: "Describe the new architecture or approach."
+      label: Proposed Solution
+      description: Describe the proposed architecture or technical solution.
     validations:
       required: true
-
-  
-
   - type: textarea
-    id: acceptance
+    id: acceptance-criteria
     attributes:
-      label: "Acceptance Criteria"
+      label: Acceptance criteria
+      description: Define the acceptance criteria or conditions for completion.
       placeholder: |
         - [ ] Criteria 1
         - [ ] Criteria 2

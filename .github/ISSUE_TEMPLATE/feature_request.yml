@@ -1,66 +1,28 @@
-name: "Feature Request"
-description: "Propose a new feature or enhancement"
+name: Feature request
+description: Suggest an improvement
 title: "feat: "
-labels: ["enhancement"]
+labels:
+  - enhancement
 body:
-  - type: markdown
-    attributes:
-      value: |
-        ## Feature Request
-        Describe the feature you'd like to see added.
-
   - type: textarea
-    id: overview
+    id: description
     attributes:
-      label: "Overview"
-      description: "A clear description of the feature and why it's needed."
-      placeholder: "What problem does this solve?"
+      label: Description
+      description: What user problem are you solving or feature are you proposing?
     validations:
       required: true
-
   - type: textarea
-    id: root-cause
+    id: proposed-solution
     attributes:
-      label: "Root Cause / Motivation"
-      description: "Why is this feature needed? What limitation or pain point does it address?"
-    validations:
-      required: false
-
-  - type: textarea
-    id: solution
-    attributes:
-      label: "Proposed Technical Solution"
-      description: "Describe the technical approach in detail."
+      label: Proposed Solution
+      description: Describe your proposed approach or solution in detail.
     validations:
       required: true
-
-  - type: dropdown
-    id: component
-    attributes:
-      label: "Affected Component"
-      options:
-        - "Mobile App (Flutter)"
-        - "Backend (FastAPI)"
-        - "Frontend (Web Dashboard)"
-        - "BLE Communication"
-        - "Architecture / System Design"
-        - "Other"
-    validations:
-      required: true
-
   - type: textarea
-    id: edge-cases
+    id: acceptance-criteria
     attributes:
-      label: "Edge Cases"
-      description: "Any edge cases or potential issues to consider."
-    validations:
-      required: false
-
-  - type: textarea
-    id: acceptance
-    attributes:
-      label: "Acceptance Criteria"
-      description: "Checklist of conditions that must be met."
+      label: Acceptance criteria
+      description: Checklist of conditions that must be met.
       placeholder: |
         - [ ] Criteria 1
         - [ ] Criteria 2
