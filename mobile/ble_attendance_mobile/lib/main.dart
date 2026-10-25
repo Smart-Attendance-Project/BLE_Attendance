@@ -823,7 +823,7 @@ class _TeacherPageState extends State<TeacherPage>
         _activeBatchId,
         subjectName,
         _globalTotalHits,
-        _finalizationOpen,
+        finalizationOpen: _finalizationOpen,
       );
       final data = AdvertiseData(
         serviceUuid: kTeacherServiceUuid,
@@ -978,15 +978,21 @@ class _TeacherPageState extends State<TeacherPage>
     int divisionId,
     int? batchId,
     String subject,
-    int seq,
-    bool finalizationOpen,
-  ) {
+    int seq, {
+    bool finalizationOpen = false,
+    bool sessionEnded = false,
+  }) {
     final subjectPart = subject.length > 10
         ? subject.substring(0, 10)
         : subject;
-    final fFlag = finalizationOpen ? '|F' : '';
+    String flag = '';
+    if (sessionEnded) {
+      flag = '|E';
+    } else if (finalizationOpen) {
+      flag = '|F';
+    }
     return utf8.encode(
-      'T2|$divisionId|${batchId ?? 0}|$subjectPart|$seq$fFlag',
+      'T2|$divisionId|${batchId ?? 0}|$subjectPart|$seq$flag',
     );
   }
 
@@ -1027,7 +1033,6 @@ class _TeacherPageState extends State<TeacherPage>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: unverifiedPresent.map((t) {
-                      final name = _studentNames[t.studentId];
                       return Padding(
                         padding: const EdgeInsets.symmetric(vertical: 3),
                         child: Row(
@@ -1039,7 +1044,7 @@ class _TeacherPageState extends State<TeacherPage>
                             ),
                             const SizedBox(width: 8),
                             Text(
-                              '${t.studentId}${name != null ? ' • $name' : ''}',
+                              t.studentId,
                               style: const TextStyle(
                                 fontWeight: FontWeight.w600,
                                 fontSize: 13,
@@ -1125,6 +1130,31 @@ class _TeacherPageState extends State<TeacherPage>
           )
           .toList();
 
+      // Step 0: Broadcast the 'E' (session ended) flag via BLE for students
+      // so all students in the room detect session end immediately without internet.
+      if (_activeDivisionId != null) {
+        try {
+          final endBytes = _encodeTeacherPayload(
+            _activeDivisionId!,
+            _activeBatchId,
+            _activeSubjectName ?? 'Lecture',
+            _globalTotalHits,
+            sessionEnded: true,
+          );
+          final endData = AdvertiseData(
+            serviceUuid: kTeacherServiceUuid,
+            includeDeviceName: false,
+            manufacturerId: kManufacturerId,
+            manufacturerData: Uint8List.fromList(endBytes),
+          );
+          await _blePeripheral.stop();
+          await _blePeripheral.start(
+            advertiseData: endData,
+            advertiseSettings: kMaxRangeAdvertiseSettings,
+          );
+        } catch (_) {}
+      }
+
       // Step 1: ensure locally created session is registered on server,
       // then submit attendance. On failure, save locally and
       // still attempt to end the session so the server state is clean.
@@ -1170,6 +1200,9 @@ class _TeacherPageState extends State<TeacherPage>
         // 404 means already ended (e.g. from a previous partial attempt) — ok
         if (e.response?.statusCode != 404) rethrow;
       }
+
+      // Brief pause to allow students to receive the |E broadcast
+      await Future.delayed(const Duration(milliseconds: 2000));
 
       _teacherAdvertiseTimer?.cancel();
       await _blePeripheral.stop();
@@ -1791,7 +1824,7 @@ class _TeacherPageState extends State<TeacherPage>
                                       Row(
                                         children: [
                                           Text(
-                                            '${s.studentId}${_studentNames[s.studentId] != null ? ' • ${_studentNames[s.studentId]}' : ''}',
+                                            s.studentId,
                                             style: const TextStyle(
                                               fontWeight: FontWeight.w700,
                                               fontSize: 14,
@@ -2356,9 +2389,42 @@ class _StudentPageState extends State<StudentPage>
                 _serverSaidNoSession = false;
               }
 
-              // Detect finalization via BLE (works even without internet)
+              // Detect finalization and session end via BLE (works even without internet)
               final bleFinalization =
                   payload['finalizationOpen'] as bool? ?? false;
+              final bleSessionEnded =
+                  payload['sessionEnded'] as bool? ?? false;
+
+              // ── Active Session End Detection via BLE ──
+              if (bleSessionEnded) {
+                if ((_sessionId != null || _subject != null || _finalizationOpen) &&
+                    mounted) {
+                  _totalBeaconReadings = 0;
+                  _inRangeHits = 0;
+                  _biometricDone = false;
+                  _proximityOk = null;
+                  _rawProximityOk = null;
+                  _lastBleBeaconTime = null;
+                  _serverSaidNoSession = true;
+                  _updateStudentAdvertising();
+                  setState(() {
+                    _sessionId = null;
+                    _subject = null;
+                    _teacherName = null;
+                    _currentClassDivisionId = null;
+                    _currentClassBatchId = null;
+                    _finalizationOpen = false;
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Lecture ended by teacher ✓'),
+                      backgroundColor: Colors.blueGrey,
+                      duration: Duration(seconds: 3),
+                    ),
+                  );
+                }
+                return;
+              }
               final wasOpen = _finalizationOpen;
 
               setState(() {
@@ -2457,8 +2523,10 @@ class _StudentPageState extends State<StudentPage>
           : null;
       final seqStr = parts.length > seqIndex ? parts[seqIndex].trim() : null;
       final seq = seqStr != null ? int.tryParse(seqStr) : null;
-      final finalizationOpen =
-          parts.length > seqIndex + 1 && parts[seqIndex + 1].trim() == 'F';
+      final flag =
+          parts.length > seqIndex + 1 ? parts[seqIndex + 1].trim() : '';
+      final finalizationOpen = flag == 'F';
+      final sessionEnded = flag == 'E';
 
       if (divisionId == null) return null;
       if (subject != null &&
@@ -2469,6 +2537,7 @@ class _StudentPageState extends State<StudentPage>
           'subject': null,
           'seq': seq,
           'finalizationOpen': finalizationOpen,
+          'sessionEnded': sessionEnded,
         };
       }
       return {
@@ -2477,6 +2546,7 @@ class _StudentPageState extends State<StudentPage>
         'subject': subject,
         'seq': seq,
         'finalizationOpen': finalizationOpen,
+        'sessionEnded': sessionEnded,
       };
     } catch (_) {}
     return null;
