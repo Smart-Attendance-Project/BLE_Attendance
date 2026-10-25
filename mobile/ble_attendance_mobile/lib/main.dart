@@ -667,8 +667,9 @@ class _TeacherPageState extends State<TeacherPage>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Offline session synced to server ✓'),
+            content: Text('Session synced with server ✓'),
             backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
           ),
         );
       }
@@ -682,6 +683,11 @@ class _TeacherPageState extends State<TeacherPage>
     if (pending == null) return;
     setState(() => _loading = true);
     try {
+      if (_pendingSession != null) {
+        try {
+          await _syncPendingSession();
+        } catch (_) {}
+      }
       final sessionId = pending['sessionId'] as String;
       final decisions =
           (pending['decisions'] as List).cast<Map<String, dynamic>>();
@@ -745,48 +751,18 @@ class _TeacherPageState extends State<TeacherPage>
       final assignmentId = _selectedSlot!['assignment_id'] as int;
       final divisionId = _selectedSlot!['division_id'] as int;
 
-      String sessionId;
-      bool offline = false;
-
-      try {
-        // Try creating the session on the server first
-        final session = await widget.api.startSession(
-          subjectName,
-          assignmentId: assignmentId,
-        );
-        sessionId = session['id'] as String;
-      } on DioException catch (e) {
-        // Network error — fall back to offline session creation
-        if (e.type == DioExceptionType.connectionTimeout ||
-            e.type == DioExceptionType.receiveTimeout ||
-            e.type == DioExceptionType.connectionError ||
-            e.type == DioExceptionType.unknown) {
-          sessionId = await _generateOfflineSessionId(assignmentId);
-          offline = true;
-          await _savePendingSession(
-            sessionId: sessionId,
-            subject: subjectName,
-            assignmentId: assignmentId,
-          );
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'Offline mode — session created locally. '
-                  'Will sync when online.',
-                ),
-                backgroundColor: Colors.orange,
-                duration: Duration(seconds: 4),
-              ),
-            );
-          }
-        } else {
-          rethrow;
-        }
-      }
+      // Instantaneous session start: Generate session ID locally so there is
+      // zero blocking network round-trip delay. BLE advertising and scanning
+      // start immediately, even when online.
+      final sessionId = await _generateOfflineSessionId(assignmentId);
+      await _savePendingSession(
+        sessionId: sessionId,
+        subject: subjectName,
+        assignmentId: assignmentId,
+      );
 
       _sessionId = sessionId;
-      _isOfflineSession = offline;
+      _isOfflineSession = true;
       _activeDivisionId = divisionId;
       _activeBatchId = _selectedSlot!['batch_id'] as int?;
       _activeDivisionStartStudentId =
@@ -805,7 +781,10 @@ class _TeacherPageState extends State<TeacherPage>
       _startForegroundService('Teaching: $subjectName');
       _startTeacherAdvertising(subjectName);
       if (mounted) setState(() {});
-      if (!offline) _fetchStudentNames(_sessionId!);
+
+      // Asynchronously sync the session to the server in the background
+      // without blocking UI or delaying BLE operations.
+      _syncPendingSession();
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -1146,8 +1125,14 @@ class _TeacherPageState extends State<TeacherPage>
           )
           .toList();
 
-      // Step 1: try to submit attendance. On failure, save locally and
+      // Step 1: ensure locally created session is registered on server,
+      // then submit attendance. On failure, save locally and
       // still attempt to end the session so the server state is clean.
+      if (_pendingSession != null) {
+        try {
+          await _syncPendingSession();
+        } catch (_) {}
+      }
       bool attendanceSubmitted = false;
       if (decisions.isNotEmpty) {
         try {
@@ -1312,8 +1297,9 @@ class _TeacherPageState extends State<TeacherPage>
   }
 
   void _syncFinalizationToServer(String sessionId) async {
-    if (_isOfflineSession || sessionId.startsWith('offline-')) {
-      // Offline session will sync finalization status when _syncPendingSession runs
+    if (_pendingSession != null) {
+      // Pending offline session: sync immediately so finalization_open=true is sent
+      _syncPendingSession();
       return;
     }
     try {
