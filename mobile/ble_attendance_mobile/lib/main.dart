@@ -661,6 +661,7 @@ class _TeacherPageState extends State<TeacherPage>
         subject: pending['subject'] as String,
         assignmentId: pending['assignmentId'] as int,
         startsAt: pending['startsAt'] as String,
+        finalizationOpen: _finalizationOpen,
       );
       await _clearPendingSession();
       if (mounted) {
@@ -1288,28 +1289,59 @@ class _TeacherPageState extends State<TeacherPage>
   Future<void> _openFinalization() async {
     final sessionId = _sessionId;
     if (sessionId == null) return;
-    setState(() => _loading = true);
-    try {
-      final session = await widget.api.openFinalization(sessionId);
-      if (!mounted) return;
-      setState(() {
-        _finalizationOpen = (session['finalization_open'] as bool?) ?? true;
-      });
-      // Keep advertising — payload now includes |F flag for students to detect finalization via BLE
-      final subjectName = _activeSubjectName ?? '';
-      await _updateTeacherAdvertisingPayload(subjectName);
-      if (!mounted) return;
+
+    // ── Open finalization locally and broadcast via BLE IMMEDIATELY ──
+    // Zero latency: Teacher UI opens finalization instantly and BLE payload
+    // broadcasts '|F' flag so students detect finalization even without internet.
+    setState(() => _finalizationOpen = true);
+    final subjectName = _activeSubjectName ?? '';
+    await _updateTeacherAdvertisingPayload(subjectName);
+
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Finalization opened for students.')),
+        const SnackBar(
+          content: Text('Finalization opened — broadcasting to students via BLE.'),
+          backgroundColor: Color(0xFF16A34A),
+          duration: Duration(seconds: 3),
+        ),
       );
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(_friendlyError(error))));
-    } finally {
-      if (mounted) setState(() => _loading = false);
     }
+
+    // Sync to server asynchronously in background
+    _syncFinalizationToServer(sessionId);
+  }
+
+  void _syncFinalizationToServer(String sessionId) async {
+    if (_isOfflineSession || sessionId.startsWith('offline-')) {
+      // Offline session will sync finalization status when _syncPendingSession runs
+      return;
+    }
+    try {
+      await widget.api.openFinalization(sessionId);
+    } catch (_) {
+      // If offline/server unreachable, retry in background
+      _retrySyncFinalization(sessionId);
+    }
+  }
+
+  /// Retry syncing finalization_open=true to the server in the background.
+  /// Tries up to 6 times with 10s interval, silently stops on success or
+  /// after max retries.
+  void _retrySyncFinalization(String sessionId) {
+    int attempts = 0;
+    Timer.periodic(const Duration(seconds: 10), (timer) async {
+      attempts++;
+      if (!mounted || attempts > 6 || !_finalizationOpen) {
+        timer.cancel();
+        return;
+      }
+      try {
+        await widget.api.openFinalization(sessionId);
+        timer.cancel(); // Success — stop retrying
+      } catch (_) {
+        // Still offline — will retry
+      }
+    });
   }
 
   Future<void> _logout() async {
@@ -1954,6 +1986,7 @@ class _StudentPageState extends State<StudentPage>
   bool _finalizationOpen = false;
   bool _blePermissionsGranted = true;
   bool _serverSaidNoSession = false;
+  DateTime? _lastBleBeaconTime; // Track when we last received a valid teacher BLE beacon
   String? _scanError;
   Timer? _scanRetryTimer;
   Timer? _sessionPollTimer;
@@ -2014,10 +2047,23 @@ class _StudentPageState extends State<StudentPage>
     super.dispose();
   }
 
+  /// Whether we are within the BLE grace window (received a beacon in the
+  /// last 45 seconds). Used to suppress 404 teardowns and throttle polling.
+  bool get _inBleGraceWindow {
+    if (_lastBleBeaconTime == null) return false;
+    return DateTime.now().difference(_lastBleBeaconTime!) <
+        const Duration(seconds: 45);
+  }
+
   void _startSessionPolling() {
     _sessionPollTimer?.cancel();
     _sessionPollTimer = Timer.periodic(kStudentSessionPollInterval, (_) async {
       if (!mounted) return;
+      // Throttle polling when actively receiving BLE beacons — the BLE
+      // payload already carries session info and finalization flag, so
+      // hammering the server every 15s is wasteful and risky (a 404
+      // could tear down a perfectly valid BLE session).
+      if (_inBleGraceWindow && _sessionId != null) return;
       await _loadActiveSession();
     });
   }
@@ -2139,17 +2185,25 @@ class _StudentPageState extends State<StudentPage>
         _sessionId = newId;
         _subject = session['subject'] as String?;
         _teacherName = session['teacher_name'] as String?;
-        _finalizationOpen = isOpen;
+        // Do not let a stale server response overwrite a BLE-detected true!
+        _finalizationOpen = isOpen || _finalizationOpen;
         _blePermissionsGranted = true;
       });
 
-      if (isOpen && !wasOpen && !_meetsThreshold) {
+      if (_finalizationOpen && !wasOpen && !_meetsThreshold) {
         _showNotEligibleDialog();
       }
     } catch (e) {
-      // If server returns 404 (no active session), clear local session state
-      // so the UI unfreezes (e.g. finalization button won't stay stuck).
+      // If server returns 404 (no active session) BUT we're still receiving
+      // valid BLE beacons from the teacher, DON'T tear down. The BLE packet
+      // is the ground truth for physical presence — the server might be
+      // unreachable, lagging, or the session may not yet be synced.
       if (e is DioException && e.response?.statusCode == 404) {
+        if (_inBleGraceWindow) {
+          // BLE beacon active — ignore the server 404 entirely.
+          // The session is still alive locally.
+          return;
+        }
         if ((_sessionId != null || _subject != null || _finalizationOpen) &&
             mounted) {
           _totalBeaconReadings = 0;
@@ -2305,23 +2359,35 @@ class _StudentPageState extends State<StudentPage>
               // Debounce proximity changes
               _updateDebouncedProximity(ok);
 
+              // ── BLE grace window: record when we last saw a valid beacon ──
+              _lastBleBeaconTime = DateTime.now();
+
+              // If the server previously said "no session" but we're still
+              // receiving valid teacher BLE beacons, the server was wrong
+              // (likely offline or out-of-sync). Reset the flag so the
+              // BLE-detected session can take effect.
+              if (_serverSaidNoSession) {
+                _serverSaidNoSession = false;
+              }
+
               // Detect finalization via BLE (works even without internet)
               final bleFinalization =
                   payload['finalizationOpen'] as bool? ?? false;
-              if (bleFinalization && !_finalizationOpen) {
-                _finalizationOpen = true;
-              }
+              final wasOpen = _finalizationOpen;
 
               setState(() {
-                // Only use BLE-detected session if the server hasn't
-                // explicitly said there's no session for this student.
-                if (!_serverSaidNoSession) {
-                  _sessionId ??= 'ble-detected';
-                  if (_subject == null && payload['subject'] != null) {
-                    _subject = payload['subject'] as String;
-                  }
+                if (bleFinalization) {
+                  _finalizationOpen = true;
+                }
+                _sessionId ??= 'ble-detected';
+                if (_subject == null && payload['subject'] != null) {
+                  _subject = payload['subject'] as String;
                 }
               });
+
+              if (bleFinalization && !wasOpen && !_meetsThreshold) {
+                _showNotEligibleDialog();
+              }
             }
           },
           onError: (error) {
@@ -3119,11 +3185,13 @@ class ApiClient {
     required String subject,
     required int assignmentId,
     required String startsAt,
+    bool finalizationOpen = false,
   }) => _authedPost('/sessions/sync', {
     'client_session_id': clientSessionId,
     'subject': subject,
     'assignment_id': assignmentId,
     'starts_at': startsAt,
+    'finalization_open': finalizationOpen,
   });
 
   Future<Map<String, dynamic>> endSession(String sessionId) =>

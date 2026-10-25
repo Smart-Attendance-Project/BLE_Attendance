@@ -329,6 +329,10 @@ def sync_offline_session(payload: SessionSyncRequest,
     if existing:
         if existing.teacher_user_id != teacher.id:
             raise HTTPException(status_code=403, detail="Session belongs to another teacher")
+        if payload.finalization_open and not existing.finalization_open:
+            existing.finalization_open = True
+            db.commit()
+            db.refresh(existing)
         return _session_out(existing)
 
     # Validate assignment ownership
@@ -347,6 +351,7 @@ def sync_offline_session(payload: SessionSyncRequest,
         starts_at=payload.starts_at,
         ends_at=payload.ends_at,
         is_active=payload.is_active,
+        finalization_open=payload.finalization_open,
     )
     db.add(session)
     db.commit()

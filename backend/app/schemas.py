@@ -62,6 +62,7 @@ class SessionSyncRequest(BaseModel):
     starts_at: datetime
     ends_at: Optional[datetime] = None
     is_active: bool = True
+    finalization_open: bool = False
 
 
 class SessionOut(BaseModel):
