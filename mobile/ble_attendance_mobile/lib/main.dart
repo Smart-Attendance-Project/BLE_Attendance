@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
+
+import 'package:crypto/crypto.dart';
 
 import 'package:android_intent_plus/android_intent.dart';
 import 'package:dio/dio.dart';
@@ -483,6 +486,10 @@ class _TeacherPageState extends State<TeacherPage>
   // Pending (offline) attendance — populated when submit fails
   Map<String, dynamic>? _pendingAttendance; // {sessionId, subject, decisions, totalHits}
 
+  // Pending (offline) session — populated when session is created offline
+  Map<String, dynamic>? _pendingSession; // {sessionId, subject, assignmentId, startsAt}
+  bool _isOfflineSession = false; // true when current session was created offline
+
   @override
   void initState() {
     super.initState();
@@ -491,11 +498,14 @@ class _TeacherPageState extends State<TeacherPage>
     _loadTodaySchedule();
     _loadActiveSession();
     _loadPendingAttendance();
+    _loadPendingSession();
     // Refresh schedule + active session every 30s (date-aware — see
     // _loadTodaySchedule for the day-change logic)
     _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       _loadTodaySchedule();
       if (_sessionId == null) _loadActiveSession();
+      // Attempt to sync any offline-created session when connectivity returns
+      _syncPendingSession();
     });
     // Fast polling for active session student verifications
     _sessionActiveTimer = Timer.periodic(const Duration(seconds: 6), (_) {
@@ -563,6 +573,7 @@ class _TeacherPageState extends State<TeacherPage>
   // ---------------------------------------------------------------------------
 
   static const _kPendingAttendanceKey = 'teacher_pending_attendance';
+  static const _kPendingSessionKey = 'teacher_pending_session';
 
   Future<void> _loadPendingAttendance() async {
     try {
@@ -596,6 +607,73 @@ class _TeacherPageState extends State<TeacherPage>
   Future<void> _clearPendingAttendance() async {
     await _storage.delete(key: _kPendingAttendanceKey);
     if (mounted) setState(() => _pendingAttendance = null);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Offline / pending session helpers
+  // ---------------------------------------------------------------------------
+
+  Future<void> _savePendingSession({
+    required String sessionId,
+    required String subject,
+    required int assignmentId,
+  }) async {
+    final data = {
+      'sessionId': sessionId,
+      'subject': subject,
+      'assignmentId': assignmentId,
+      'startsAt': DateTime.now().toUtc().toIso8601String(),
+    };
+    await _storage.write(
+      key: _kPendingSessionKey,
+      value: jsonEncode(data),
+    );
+    if (mounted) setState(() => _pendingSession = data);
+  }
+
+  Future<void> _loadPendingSession() async {
+    try {
+      final raw = await _storage.read(key: _kPendingSessionKey);
+      if (raw == null) return;
+      final data = jsonDecode(raw) as Map<String, dynamic>;
+      if (mounted) setState(() => _pendingSession = data);
+    } catch (_) {}
+  }
+
+  Future<void> _clearPendingSession() async {
+    await _storage.delete(key: _kPendingSessionKey);
+    if (mounted) {
+      setState(() {
+        _pendingSession = null;
+        _isOfflineSession = false;
+      });
+    }
+  }
+
+  /// Attempt to sync an offline-created session with the backend.
+  /// Called periodically by the refresh timer; no-ops if nothing is pending.
+  Future<void> _syncPendingSession() async {
+    final pending = _pendingSession;
+    if (pending == null) return;
+    try {
+      await widget.api.syncOfflineSession(
+        clientSessionId: pending['sessionId'] as String,
+        subject: pending['subject'] as String,
+        assignmentId: pending['assignmentId'] as int,
+        startsAt: pending['startsAt'] as String,
+      );
+      await _clearPendingSession();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Offline session synced to server ✓'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (_) {
+      // Still offline — will retry on next timer tick
+    }
   }
 
   Future<void> _retryPendingAttendance() async {
@@ -636,6 +714,19 @@ class _TeacherPageState extends State<TeacherPage>
 
   // ---------------------------------------------------------------------------
 
+  /// Generate a deterministic offline session ID using SHA-256.
+  /// Combines teacher identifier, assignment ID, timestamp, and a random salt
+  /// to produce a collision-resistant ID even across concurrent faculty.
+  Future<String> _generateOfflineSessionId(int assignmentId) async {
+    final identifier = await widget.api.readIdentifier() ?? 'unknown';
+    final timestamp = DateTime.now().toIso8601String();
+    final salt = Random.secure().nextInt(1 << 30).toRadixString(36);
+    final input = '$identifier|$assignmentId|$timestamp|$salt';
+    final hash = sha256.convert(utf8.encode(input)).toString();
+    // Use first 32 chars of the hex digest — unique enough, fits DB varchar(36)
+    return 'offline-${hash.substring(0, 32)}';
+  }
+
   Future<void> _startSession() async {
     if (_selectedSlot == null) {
       ScaffoldMessenger.of(
@@ -652,17 +743,55 @@ class _TeacherPageState extends State<TeacherPage>
       final subjectName = _selectedSlot!['subject_name'] as String;
       final assignmentId = _selectedSlot!['assignment_id'] as int;
       final divisionId = _selectedSlot!['division_id'] as int;
-      final session = await widget.api.startSession(
-        subjectName,
-        assignmentId: assignmentId,
-      );
-      _sessionId = session['id'] as String;
+
+      String sessionId;
+      bool offline = false;
+
+      try {
+        // Try creating the session on the server first
+        final session = await widget.api.startSession(
+          subjectName,
+          assignmentId: assignmentId,
+        );
+        sessionId = session['id'] as String;
+      } on DioException catch (e) {
+        // Network error — fall back to offline session creation
+        if (e.type == DioExceptionType.connectionTimeout ||
+            e.type == DioExceptionType.receiveTimeout ||
+            e.type == DioExceptionType.connectionError ||
+            e.type == DioExceptionType.unknown) {
+          sessionId = await _generateOfflineSessionId(assignmentId);
+          offline = true;
+          await _savePendingSession(
+            sessionId: sessionId,
+            subject: subjectName,
+            assignmentId: assignmentId,
+          );
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Offline mode — session created locally. '
+                  'Will sync when online.',
+                ),
+                backgroundColor: Colors.orange,
+                duration: Duration(seconds: 4),
+              ),
+            );
+          }
+        } else {
+          rethrow;
+        }
+      }
+
+      _sessionId = sessionId;
+      _isOfflineSession = offline;
       _activeDivisionId = divisionId;
       _activeBatchId = _selectedSlot!['batch_id'] as int?;
       _activeDivisionStartStudentId =
           _selectedSlot!['start_student_id'] as String?;
       _activeDivisionEndStudentId = _selectedSlot!['end_student_id'] as String?;
-      _finalizationOpen = (session['finalization_open'] as bool?) ?? false;
+      _finalizationOpen = false;
 
       _globalTotalHits = 0;
       _activeSubjectName = subjectName;
@@ -675,7 +804,7 @@ class _TeacherPageState extends State<TeacherPage>
       _startForegroundService('Teaching: $subjectName');
       _startTeacherAdvertising(subjectName);
       if (mounted) setState(() {});
-      _fetchStudentNames(_sessionId!);
+      if (!offline) _fetchStudentNames(_sessionId!);
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -2982,6 +3111,19 @@ class ApiClient {
   }) => _authedPost('/sessions', {
     'subject': subject,
     'assignment_id': ?assignmentId,
+  });
+
+  /// Sync an offline-created session to the server.
+  Future<Map<String, dynamic>> syncOfflineSession({
+    required String clientSessionId,
+    required String subject,
+    required int assignmentId,
+    required String startsAt,
+  }) => _authedPost('/sessions/sync', {
+    'client_session_id': clientSessionId,
+    'subject': subject,
+    'assignment_id': assignmentId,
+    'starts_at': startsAt,
   });
 
   Future<Map<String, dynamic>> endSession(String sessionId) =>

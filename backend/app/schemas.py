@@ -50,6 +50,18 @@ class UserOut(BaseModel):
 class SessionCreateRequest(BaseModel):
     subject: str = Field(min_length=2, max_length=120)
     assignment_id: Optional[int] = None
+    client_session_id: Optional[str] = Field(None, min_length=8, max_length=64,
+                                              description="Client-generated session ID for offline creation")
+
+
+class SessionSyncRequest(BaseModel):
+    """Sync an offline-created session to the server."""
+    client_session_id: str = Field(min_length=8, max_length=64)
+    subject: str = Field(min_length=2, max_length=120)
+    assignment_id: Optional[int] = None
+    starts_at: datetime
+    ends_at: Optional[datetime] = None
+    is_active: bool = True
 
 
 class SessionOut(BaseModel):

@@ -38,7 +38,8 @@ from app.schemas import (
     CreateTeacherIn, DetectionIn, DivisionIn, DivisionOut, DivisionStudentIn,
     LoginRequest, RegisterRequest, ScheduleSlotIn, ScheduleSlotOut,
     SemesterIn, SemesterOut, SessionAttendanceSummary, SessionCreateRequest,
-    SessionOut, SubjectIn, SubjectOut, TokenResponse, UserOut,
+    SessionOut, SessionSyncRequest, SubjectIn, SubjectOut, TokenResponse,
+    UserOut,
 )
 from app.services import compute_presence_ratio, upsert_attendance
 
@@ -274,13 +275,28 @@ def start_session(payload: SessionCreateRequest, db: Session = Depends(get_db),
     assignment = db.get(TeacherAssignment, payload.assignment_id)
     if not assignment or assignment.teacher_user_id != teacher.id:
         raise HTTPException(status_code=404, detail="Assignment not found")
+
+    # If a client-generated session ID is provided (offline creation), check if
+    # it was already synced (idempotent) before checking for active sessions.
+    if payload.client_session_id:
+        existing = db.get(LectureSession, payload.client_session_id)
+        if existing and existing.teacher_user_id == teacher.id:
+            return _session_out(existing)
+
     active = db.scalar(select(LectureSession).where(
         and_(LectureSession.teacher_user_id == teacher.id, LectureSession.is_active.is_(True))
     ))
     if active:
         raise HTTPException(status_code=409, detail="A session is already active")
-    session = LectureSession(subject=payload.subject, teacher_user_id=teacher.id,
-                             token=secrets.token_hex(8), assignment_id=payload.assignment_id)
+
+    # Use client-generated ID if provided, otherwise auto-generate (server UUID)
+    session_kwargs = dict(
+        subject=payload.subject, teacher_user_id=teacher.id,
+        token=secrets.token_hex(8), assignment_id=payload.assignment_id,
+    )
+    if payload.client_session_id:
+        session_kwargs['id'] = payload.client_session_id
+    session = LectureSession(**session_kwargs)
     db.add(session)
     db.commit()
     db.refresh(session)
@@ -294,6 +310,45 @@ def end_session(session_id: str, db: Session = Depends(get_db),
     session.is_active = False
     session.finalization_open = False
     session.ends_at = datetime.utcnow()
+    db.commit()
+    db.refresh(session)
+    return _session_out(session)
+
+
+@app.post("/sessions/sync", response_model=SessionOut)
+def sync_offline_session(payload: SessionSyncRequest,
+                         db: Session = Depends(get_db),
+                         teacher: User = Depends(require_role(UserRole.teacher))):
+    """Register an offline-created session with the server.
+
+    Idempotent — if the session already exists (same client_session_id),
+    returns the existing record without modification.
+    """
+    # Check if already synced (idempotent)
+    existing = db.get(LectureSession, payload.client_session_id)
+    if existing:
+        if existing.teacher_user_id != teacher.id:
+            raise HTTPException(status_code=403, detail="Session belongs to another teacher")
+        return _session_out(existing)
+
+    # Validate assignment ownership
+    if payload.assignment_id is None:
+        raise HTTPException(status_code=422, detail="A class assignment is required")
+    assignment = db.get(TeacherAssignment, payload.assignment_id)
+    if not assignment or assignment.teacher_user_id != teacher.id:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    session = LectureSession(
+        id=payload.client_session_id,
+        subject=payload.subject,
+        teacher_user_id=teacher.id,
+        token=secrets.token_hex(8),
+        assignment_id=payload.assignment_id,
+        starts_at=payload.starts_at,
+        ends_at=payload.ends_at,
+        is_active=payload.is_active,
+    )
+    db.add(session)
     db.commit()
     db.refresh(session)
     return _session_out(session)
