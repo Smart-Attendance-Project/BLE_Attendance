@@ -10,20 +10,13 @@ body:
         Use this for system-level design proposals, refactoring, or technical debt.
 
   - type: textarea
-    id: overview
+    id: Description 
     attributes:
-      label: "Overview"
+      label: "Description "
       description: "Describe the architectural change or technical debt."
     validations:
       required: true
 
-  - type: textarea
-    id: current-state
-    attributes:
-      label: "Current State"
-      description: "How does the system currently work? What's the problem?"
-    validations:
-      required: true
 
   - type: textarea
     id: proposed-design
@@ -33,13 +26,7 @@ body:
     validations:
       required: true
 
-  - type: textarea
-    id: tradeoffs
-    attributes:
-      label: "Trade-offs & Edge Cases"
-      description: "What are the risks, trade-offs, or edge cases?"
-    validations:
-      required: false
+  
 
   - type: textarea
     id: acceptance
