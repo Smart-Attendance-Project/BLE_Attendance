@@ -792,9 +792,9 @@ class _TeacherPageState extends State<TeacherPage>
       _activeDivisionStartStudentId =
           _selectedSlot!['start_student_id'] as String?;
       _activeDivisionEndStudentId = _selectedSlot!['end_student_id'] as String?;
-      _finalizationOpen = false;
-
-      _globalTotalHits = 0;
+      // Start hit counter at 1 immediately at t = 0 so the initial beacon
+      // registers with students instantly without waiting for the 4-second timer.
+      _globalTotalHits = 1;
       _activeSubjectName = subjectName;
       _activeSubjectCode = _selectedSlot!['subject_code'] as String?;
       _studentTallies.clear();
@@ -2427,6 +2427,16 @@ class _StudentPageState extends State<StudentPage>
 
     _rawProximityOk = newValue;
     _proximityDebounceTimer?.cancel();
+
+    // Instant update on initial discovery or coming in-range (0 delay).
+    if (_proximityOk == null || newValue == true) {
+      if (_proximityOk != newValue && mounted) {
+        setState(() => _proximityOk = newValue);
+      }
+      return;
+    }
+
+    // Only debounce when dropping out of range to smooth momentary BLE packet drops
     _proximityDebounceTimer = Timer(kProximityDebounceDuration, () {
       if (!mounted) return;
       if (_proximityOk != newValue) {
