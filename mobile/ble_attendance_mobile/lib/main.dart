@@ -1158,47 +1158,84 @@ class _TeacherPageState extends State<TeacherPage>
       // Step 1: ensure locally created session is registered on server,
       // then submit attendance. On failure, save locally and
       // still attempt to end the session so the server state is clean.
-      if (_pendingSession != null) {
-        try {
-          await _syncPendingSession();
-        } catch (_) {}
+      bool sessionSynced = _pendingSession == null;
+      if (!sessionSynced) {
+        // Retry sync up to 3 times with short delays to handle transient
+        // network issues — the server must know this session ID before
+        // we can submit attendance or end it.
+        for (int attempt = 0; attempt < 3 && !sessionSynced; attempt++) {
+          try {
+            await _syncPendingSession();
+            sessionSynced = _pendingSession == null;
+          } catch (_) {
+            if (attempt < 2) {
+              await Future.delayed(const Duration(milliseconds: 500));
+            }
+          }
+        }
       }
+
       bool attendanceSubmitted = false;
-      if (decisions.isNotEmpty) {
-        try {
-          await widget.api.batchSubmitAttendance(resolvedSessionId, decisions);
-          attendanceSubmitted = true;
-        } catch (submitError) {
-          // Network / server error — persist locally so teacher can retry later
+      if (!sessionSynced) {
+        // Server doesn't know this session — save everything locally
+        // so the teacher can retry when connectivity is restored.
+        if (decisions.isNotEmpty) {
           await _savePendingAttendance(
             sessionId: resolvedSessionId,
             subject: _activeSubjectName ?? 'Lecture',
             decisions: decisions,
             totalHits: _globalTotalHits,
           );
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'Network error — attendance saved locally. '
-                  'Tap "Upload Pending" to retry when online.',
-                ),
-                duration: Duration(seconds: 5),
-                backgroundColor: Colors.orange,
+        }
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Offline — session & attendance saved locally. '
+                'Tap "Upload Pending" when online.',
               ),
-            );
-          }
+              duration: Duration(seconds: 5),
+              backgroundColor: Colors.orange,
+            ),
+          );
         }
       } else {
-        attendanceSubmitted = true; // nothing to submit
-      }
+        // Session is on the server — submit attendance and end normally.
+        if (decisions.isNotEmpty) {
+          try {
+            await widget.api.batchSubmitAttendance(resolvedSessionId, decisions);
+            attendanceSubmitted = true;
+          } catch (submitError) {
+            await _savePendingAttendance(
+              sessionId: resolvedSessionId,
+              subject: _activeSubjectName ?? 'Lecture',
+              decisions: decisions,
+              totalHits: _globalTotalHits,
+            );
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Network error — attendance saved locally. '
+                    'Tap "Upload Pending" to retry when online.',
+                  ),
+                  duration: Duration(seconds: 5),
+                  backgroundColor: Colors.orange,
+                ),
+              );
+            }
+          }
+        } else {
+          attendanceSubmitted = true; // nothing to submit
+        }
 
-      // Step 2: end the session on the server regardless of submit outcome.
-      try {
-        await widget.api.endSession(resolvedSessionId);
-      } on DioException catch (e) {
-        // 404 means already ended (e.g. from a previous partial attempt) — ok
-        if (e.response?.statusCode != 404) rethrow;
+        // End the session on the server.
+        try {
+          await widget.api.endSession(resolvedSessionId);
+        } on DioException catch (e) {
+          // 404 means already ended (e.g. from a previous partial attempt) — ok
+          if (e.response?.statusCode != 404) rethrow;
+        }
       }
 
       // Brief pause to allow students to receive the |E broadcast
@@ -2005,6 +2042,7 @@ class _StudentPageState extends State<StudentPage>
   bool _finalizationOpen = false;
   bool _blePermissionsGranted = true;
   bool _serverSaidNoSession = false;
+  bool _sessionEndedViaBle = false; // Prevents server poll from re-establishing a BLE-ended session
   DateTime? _lastBleBeaconTime; // Track when we last received a valid teacher BLE beacon
   String? _scanError;
   Timer? _scanRetryTimer;
@@ -2176,6 +2214,11 @@ class _StudentPageState extends State<StudentPage>
   }
 
   Future<void> _loadActiveSession() async {
+    // If the session was explicitly ended via BLE |E flag, don't let
+    // server polling re-establish it (the server may still show active
+    // because the teacher's endSession call hasn't landed yet).
+    if (_sessionEndedViaBle) return;
+
     // Try server first (may fail if offline — that's ok)
     try {
       final session = await widget.api.getActiveSession();
@@ -2397,6 +2440,9 @@ class _StudentPageState extends State<StudentPage>
 
               // ── Active Session End Detection via BLE ──
               if (bleSessionEnded) {
+                // Mark session as ended via BLE so server polling
+                // won't accidentally re-establish it.
+                _sessionEndedViaBle = true;
                 if ((_sessionId != null || _subject != null || _finalizationOpen) &&
                     mounted) {
                   _totalBeaconReadings = 0;
@@ -2426,6 +2472,13 @@ class _StudentPageState extends State<StudentPage>
                 return;
               }
               final wasOpen = _finalizationOpen;
+
+              // A normal (non-ended) beacon from the teacher means a
+              // new session is active — clear the BLE-ended lock so
+              // polling can resume normally.
+              if (_sessionEndedViaBle) {
+                _sessionEndedViaBle = false;
+              }
 
               setState(() {
                 if (bleFinalization) {
