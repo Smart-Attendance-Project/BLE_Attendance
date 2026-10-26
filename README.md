@@ -100,6 +100,26 @@ For physical Android device on same LAN:
 flutter run --dart-define=API_BASE_URL=http://<your-laptop-ip>:8000
 ```
 
+## Continuous integration
+
+GitHub Actions runs for every push and pull request through
+`.github/workflows/ci.yml`:
+
+- Backend regression tests on Python 3.11 and 3.12
+- Frontend production build
+- Flutter analysis and the widget/BLE stress test suite
+
+Run the backend checks locally with:
+
+```bash
+python3 -m pip install -r backend/requirements-dev.txt
+PYTHONPATH=backend python3 -m pytest backend/tests -q
+```
+
+Run the frontend and mobile checks locally from their respective project
+directories with `npm ci && npm run build`, and `flutter pub get && flutter
+analyze && flutter test --reporter expanded`.
+
 ## Build APK
 
 ```bash
