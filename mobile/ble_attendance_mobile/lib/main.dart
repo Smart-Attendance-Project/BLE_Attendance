@@ -1,12 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:android_intent_plus/android_intent.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_ble_peripheral/flutter_ble_peripheral.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -14,6 +12,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import 'face_registration_page.dart';
 import 'face_verification_dialog.dart';
+import 'native_ble_advertiser.dart';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -27,16 +26,6 @@ const Duration kTeacherDetectionBatchInterval = Duration(seconds: 30);
 const Duration kTeacherPollInterval = Duration(seconds: 10);
 const Duration kStudentSessionPollInterval = Duration(seconds: 15);
 const Duration kProximityDebounceDuration = Duration(seconds: 3);
-const int kManufacturerId = 0x004C;
-
-/// Max-range BLE advertising settings (Android).
-/// Uses highest TX power and low-latency mode for ~10 m+ visibility.
-final AdvertiseSettings kMaxRangeAdvertiseSettings = AdvertiseSettings(
-  advertiseMode: AdvertiseMode.advertiseModeLowLatency,
-  txPowerLevel: AdvertiseTxPower.advertiseTxPowerHigh,
-  connectable: false,
-  timeout: 0,
-);
 const String kDefaultApiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
   defaultValue: 'https://ble-attendance.onrender.com',
@@ -443,7 +432,6 @@ class TeacherPage extends StatefulWidget {
 
 class _TeacherPageState extends State<TeacherPage>
     with WidgetsBindingObserver {
-  final FlutterBlePeripheral _blePeripheral = FlutterBlePeripheral();
   final FlutterReactiveBle _ble = FlutterReactiveBle();
   static const _storage = FlutterSecureStorage();
 
@@ -518,7 +506,7 @@ class _TeacherPageState extends State<TeacherPage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _blePeripheral.stop();
+    NativeBleAdvertiser.stop();
     _scanSub?.cancel();
     _scanRetryTimer?.cancel();
     _scanCycleTimer?.cancel();
@@ -716,16 +704,9 @@ class _TeacherPageState extends State<TeacherPage>
         _globalTotalHits,
         _finalizationOpen,
       );
-      final data = AdvertiseData(
+      await NativeBleAdvertiser.start(
         serviceUuid: kTeacherServiceUuid,
-        includeDeviceName: false,
-        manufacturerId: kManufacturerId,
-        manufacturerData: Uint8List.fromList(payloadBytes),
-      );
-      await _blePeripheral.stop();
-      await _blePeripheral.start(
-        advertiseData: data,
-        advertiseSettings: kMaxRangeAdvertiseSettings,
+        payload: payloadBytes,
       );
     } catch (_) {}
   }
@@ -1057,7 +1038,7 @@ class _TeacherPageState extends State<TeacherPage>
       }
 
       _teacherAdvertiseTimer?.cancel();
-      await _blePeripheral.stop();
+      await NativeBleAdvertiser.stop();
       _scanSub?.cancel();
       _isAdvertising = false;
       _isScanning = false;
@@ -1185,7 +1166,7 @@ class _TeacherPageState extends State<TeacherPage>
 
   Future<void> _logout() async {
     _teacherAdvertiseTimer?.cancel();
-    await _blePeripheral.stop();
+    await NativeBleAdvertiser.stop();
     _scanSub?.cancel();
     FlutterForegroundTask.stopService();
     await widget.api.clearSession();
@@ -1807,7 +1788,6 @@ class StudentPage extends StatefulWidget {
 class _StudentPageState extends State<StudentPage>
     with WidgetsBindingObserver {
   final FlutterReactiveBle _ble = FlutterReactiveBle();
-  final FlutterBlePeripheral _blePeripheral = FlutterBlePeripheral();
 
   StreamSubscription<DiscoveredDevice>? _scanSub;
   StreamSubscription<BleStatus>? _bleStatusSub;
@@ -1880,7 +1860,7 @@ class _StudentPageState extends State<StudentPage>
     _scanCycleTimer?.cancel();
     _sessionPollTimer?.cancel();
     _proximityDebounceTimer?.cancel();
-    _blePeripheral.stop();
+    NativeBleAdvertiser.stop();
     FlutterForegroundTask.stopService();
     super.dispose();
   }
@@ -2088,17 +2068,9 @@ class _StudentPageState extends State<StudentPage>
           : '|$_currentClassDivisionId:${_currentClassBatchId ?? 0}';
       final payloadStr =
           '$_studentIdentifier|$_inRangeHits|$_totalBeaconReadings$scope$vFlag';
-      final idBytes = utf8.encode(payloadStr);
-      final data = AdvertiseData(
+      await NativeBleAdvertiser.start(
         serviceUuid: kStudentServiceUuid,
-        includeDeviceName: false,
-        manufacturerId: kManufacturerId,
-        manufacturerData: Uint8List.fromList(idBytes),
-      );
-      await _blePeripheral.stop();
-      await _blePeripheral.start(
-        advertiseData: data,
-        advertiseSettings: kMaxRangeAdvertiseSettings,
+        payload: utf8.encode(payloadStr),
       );
     } catch (_) {}
   }
@@ -2451,7 +2423,7 @@ class _StudentPageState extends State<StudentPage>
   Future<void> _logout() async {
     _scanSub?.cancel();
     _bleStatusSub?.cancel();
-    _blePeripheral.stop();
+    NativeBleAdvertiser.stop();
     FlutterForegroundTask.stopService();
     await widget.api.clearSession();
     if (!mounted) return;
@@ -2782,7 +2754,7 @@ class _StudentPageState extends State<StudentPage>
               OutlinedButton.icon(
                 onPressed: _openAutoStartSettings,
                 icon: const Icon(Icons.settings_outlined),
-                label: const Text('Fix Background Restrictions'),
+                label: const Text('Allow Auto-start / Background'),
               ),
             ],
             const SizedBox(height: 8),
@@ -2794,17 +2766,60 @@ class _StudentPageState extends State<StudentPage>
 
   Future<void> _openAutoStartSettings() async {
     if (!Platform.isAndroid) return;
-    // Try Xiaomi/MIUI autostart intent
-    try {
-      final intent = AndroidIntent(
+
+    // OEMs hide autostart controls behind different private activities. Try
+    // the known variants in order; unsupported variants simply throw.
+    final candidates = <AndroidIntent>[
+      AndroidIntent(
         action: 'android.intent.action.MAIN',
         package: 'com.miui.securitycenter',
         componentName:
             'com.miui.securitycenter/com.miui.permcenter.autostart.AutoStartManagementActivity',
-      );
-      await intent.launch();
-      return;
-    } catch (_) {}
+      ),
+      AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        package: 'com.coloros.safecenter',
+        componentName:
+            'com.coloros.safecenter/com.coloros.safecenter.permission.startup.StartupAppListActivity',
+      ),
+      AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        package: 'com.oppo.safe',
+        componentName:
+            'com.oppo.safe/com.oppo.safe.permission.startup.StartupAppListActivity',
+      ),
+      AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        package: 'com.iqoo.secure',
+        componentName:
+            'com.iqoo.secure/com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity',
+      ),
+      AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        package: 'com.vivo.permissionmanager',
+        componentName:
+            'com.vivo.permissionmanager/com.vivo.permissionmanager.activity.BgStartUpManagerActivity',
+      ),
+      AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        package: 'com.oneplus.security',
+        componentName:
+            'com.oneplus.security/com.oneplus.security.chainlaunch.view.ChainLaunchAppListActivity',
+      ),
+      AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        package: 'com.huawei.systemmanager',
+        componentName:
+            'com.huawei.systemmanager/com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity',
+      ),
+    ];
+
+    for (final intent in candidates) {
+      try {
+        await intent.launch();
+        return;
+      } catch (_) {}
+    }
 
     // Fallback: open app info
     try {
@@ -3158,19 +3173,25 @@ void _initForegroundTask() {
     foregroundTaskOptions: ForegroundTaskOptions(
       eventAction: ForegroundTaskEventAction.nothing(),
       autoRunOnBoot: false,
-      autoRunOnMyPackageReplaced: false,
+      autoRunOnMyPackageReplaced: true,
       allowWakeLock: true,
       allowWifiLock: true,
+      allowAutoRestart: true,
+      stopWithTask: false,
     ),
   );
 }
 
 Future<void> _startForegroundService(String text) async {
   if (!Platform.isAndroid) return;
-  await FlutterForegroundTask.startService(
-    notificationTitle: 'BLE Attendance',
-    notificationText: text,
-  );
+  if (await FlutterForegroundTask.isRunningService) {
+    await FlutterForegroundTask.restartService();
+  } else {
+    await FlutterForegroundTask.startService(
+      notificationTitle: 'BLE Attendance',
+      notificationText: text,
+    );
+  }
 }
 
 String _friendlyError(Object error) {
