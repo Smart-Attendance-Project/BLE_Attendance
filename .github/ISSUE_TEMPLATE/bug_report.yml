@@ -1,0 +1,30 @@
+name: Bug report
+description: Report a reproducible bug
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Clear description of the bug and steps to reproduce.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed Solution
+      description: Suggested fix or proposed solution (if any).
+    validations:
+      required: false
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: What needs to be verified for this bug to be considered resolved?
+      placeholder: |
+        - [ ] Criteria 1
+        - [ ] Criteria 2
+    validations:
+      required: true

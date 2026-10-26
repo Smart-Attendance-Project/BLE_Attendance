@@ -10,6 +10,10 @@ IST = timezone(timedelta(hours=5, minutes=30))
 def _now_ist() -> datetime:
     return datetime.now(tz=IST)
 
+
+def _is_set(val) -> bool:
+    return val is not None and not hasattr(val, "default")
+
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -469,6 +473,7 @@ def teacher_today_schedule(db: Session = Depends(get_db),
         return []
     slots = db.execute(
         select(ScheduleSlot)
+        .join(TeacherAssignment, TeacherAssignment.id == ScheduleSlot.assignment_id)
         .options(
             joinedload(ScheduleSlot.assignment).joinedload(TeacherAssignment.subject),
             joinedload(ScheduleSlot.assignment).joinedload(TeacherAssignment.division).joinedload(Division.branch),
@@ -476,23 +481,28 @@ def teacher_today_schedule(db: Session = Depends(get_db),
             joinedload(ScheduleSlot.assignment).joinedload(TeacherAssignment.teacher),
         )
         .where(
-            and_(ScheduleSlot.day_of_week == today, ScheduleSlot.semester_id == sem.id)
+            and_(
+                ScheduleSlot.day_of_week == today,
+                ScheduleSlot.semester_id == sem.id,
+                TeacherAssignment.teacher_user_id == teacher.id,
+            )
         ).order_by(ScheduleSlot.time_start)
     ).scalars().all()
-    result = []
-    for slot in slots:
-        a = slot.assignment
-        if a.teacher_user_id != teacher.id:
-            continue
-        result.append(_slot_out(slot))
-    return result
+    return [_slot_out(slot) for slot in slots]
 
 
 @app.get("/teacher/me/assignments")
 def teacher_assignments(db: Session = Depends(get_db),
                         teacher: User = Depends(require_role(UserRole.teacher))):
     rows = db.execute(
-        select(TeacherAssignment).where(TeacherAssignment.teacher_user_id == teacher.id)
+        select(TeacherAssignment)
+        .options(
+            joinedload(TeacherAssignment.teacher),
+            joinedload(TeacherAssignment.subject),
+            joinedload(TeacherAssignment.division),
+            joinedload(TeacherAssignment.batch),
+        )
+        .where(TeacherAssignment.teacher_user_id == teacher.id)
     ).scalars().all()
     return [_assignment_out(a) for a in rows]
 
@@ -505,12 +515,20 @@ def teacher_sessions(
     db: Session = Depends(get_db),
     teacher: User = Depends(require_role(UserRole.teacher)),
 ):
-    q = select(LectureSession).where(LectureSession.teacher_user_id == teacher.id)
-    if assignment_id:
+    q = (
+        select(LectureSession)
+        .options(
+            joinedload(LectureSession.assignment).joinedload(TeacherAssignment.subject),
+            joinedload(LectureSession.assignment).joinedload(TeacherAssignment.division),
+            joinedload(LectureSession.assignment).joinedload(TeacherAssignment.batch),
+        )
+        .where(LectureSession.teacher_user_id == teacher.id)
+    )
+    if _is_set(assignment_id):
         q = q.where(LectureSession.assignment_id == assignment_id)
-    if from_date:
+    if _is_set(from_date):
         q = q.where(LectureSession.starts_at >= datetime.fromisoformat(from_date))
-    if to_date:
+    if _is_set(to_date):
         q = q.where(LectureSession.starts_at <= datetime.fromisoformat(to_date + "T23:59:59"))
     sessions = db.execute(q.order_by(desc(LectureSession.starts_at))).scalars().all()
     return [_session_out(s) for s in sessions]
@@ -528,7 +546,14 @@ def export_attendance_range(
 ):
     from openpyxl import Workbook
 
-    assignment = db.get(TeacherAssignment, assignment_id)
+    assignment = db.execute(
+        select(TeacherAssignment)
+        .options(
+            joinedload(TeacherAssignment.subject),
+            joinedload(TeacherAssignment.division),
+        )
+        .where(TeacherAssignment.id == assignment_id)
+    ).scalars().first()
     if not assignment or assignment.teacher_user_id != teacher.id:
         raise HTTPException(status_code=404, detail="Assignment not found")
 
@@ -554,6 +579,16 @@ def export_attendance_range(
         q = q.where(DivisionStudent.batch_id == assignment.batch_id)
     students = db.execute(q.order_by(User.student_id)).scalars().all()
 
+    # Batch-fetch all attendance records for these sessions in 1 query
+    session_ids = [s.id for s in sessions]
+    att_map = {}
+    if session_ids:
+        all_att = db.execute(
+            select(Attendance).where(Attendance.session_id.in_(session_ids))
+        ).scalars().all()
+        for a in all_att:
+            att_map[(a.session_id, a.student_user_id)] = a.is_present
+
     wb = Workbook()
     ws = wb.active
     ws.title = "Attendance"
@@ -567,10 +602,8 @@ def export_attendance_range(
     for row, student in enumerate(students, 2):
         ws.cell(row=row, column=1, value=student.student_id)
         for col, s in enumerate(sessions, 2):
-            att = db.scalar(select(Attendance).where(
-                and_(Attendance.session_id == s.id, Attendance.student_user_id == student.id)
-            ))
-            ws.cell(row=row, column=col, value="P" if (att and att.is_present) else "A")
+            is_present = att_map.get((s.id, student.id), False)
+            ws.cell(row=row, column=col, value="P" if is_present else "A")
 
     output = io.BytesIO()
     wb.save(output)
@@ -749,8 +782,8 @@ def create_division(payload: DivisionIn, db: Session = Depends(get_db),
 @app.get("/admin/divisions", response_model=list[DivisionOut])
 def list_divisions(branch_id: int = Query(None), db: Session = Depends(get_db),
                    _: User = Depends(get_current_user)):
-    q = select(Division)
-    if branch_id:
+    q = select(Division).options(joinedload(Division.branch))
+    if _is_set(branch_id):
         q = q.where(Division.branch_id == branch_id)
     rows = db.execute(q.order_by(Division.year, Division.div_number)).scalars().all()
     return [_div_out(d) for d in rows]
@@ -772,7 +805,7 @@ def create_batch(payload: BatchIn, db: Session = Depends(get_db),
 def list_batches(division_id: int = Query(None), db: Session = Depends(get_db),
                  _: User = Depends(get_current_user)):
     q = select(Batch)
-    if division_id:
+    if _is_set(division_id):
         q = q.where(Batch.division_id == division_id)
     rows = db.execute(q.order_by(Batch.label)).scalars().all()
     return [BatchOut(id=b.id, division_id=b.division_id, label=b.label) for b in rows]
@@ -813,10 +846,15 @@ def create_assignment(payload: AssignmentIn, db: Session = Depends(get_db),
 @app.get("/admin/assignments", response_model=list[AssignmentOut])
 def list_assignments(teacher_id: str = Query(None), division_id: int = Query(None),
                      db: Session = Depends(get_db), _: User = Depends(get_current_user)):
-    q = select(TeacherAssignment)
-    if teacher_id:
+    q = select(TeacherAssignment).options(
+        joinedload(TeacherAssignment.teacher),
+        joinedload(TeacherAssignment.subject),
+        joinedload(TeacherAssignment.division),
+        joinedload(TeacherAssignment.batch),
+    )
+    if _is_set(teacher_id):
         q = q.where(TeacherAssignment.teacher_user_id == teacher_id)
-    if division_id:
+    if _is_set(division_id):
         q = q.where(TeacherAssignment.division_id == division_id)
     rows = db.execute(q).scalars().all()
     return [_assignment_out(a) for a in rows]
@@ -851,19 +889,24 @@ def create_slot(payload: ScheduleSlotIn, db: Session = Depends(get_db),
 def list_slots(semester_id: int = Query(None), division_id: int = Query(None),
                teacher_id: str = Query(None), db: Session = Depends(get_db),
                _: User = Depends(get_current_user)):
-    q = select(ScheduleSlot)
-    if semester_id:
+    q = (
+        select(ScheduleSlot)
+        .join(TeacherAssignment, TeacherAssignment.id == ScheduleSlot.assignment_id)
+        .options(
+            joinedload(ScheduleSlot.assignment).joinedload(TeacherAssignment.subject),
+            joinedload(ScheduleSlot.assignment).joinedload(TeacherAssignment.division),
+            joinedload(ScheduleSlot.assignment).joinedload(TeacherAssignment.batch),
+            joinedload(ScheduleSlot.assignment).joinedload(TeacherAssignment.teacher),
+        )
+    )
+    if _is_set(semester_id):
         q = q.where(ScheduleSlot.semester_id == semester_id)
-    rows = db.execute(q).scalars().all()
-    result = []
-    for slot in rows:
-        a = slot.assignment
-        if division_id and a.division_id != division_id:
-            continue
-        if teacher_id and a.teacher_user_id != teacher_id:
-            continue
-        result.append(_slot_out(slot))
-    return result
+    if _is_set(division_id):
+        q = q.where(TeacherAssignment.division_id == division_id)
+    if _is_set(teacher_id):
+        q = q.where(TeacherAssignment.teacher_user_id == teacher_id)
+    rows = db.execute(q.order_by(ScheduleSlot.time_start)).scalars().all()
+    return [_slot_out(slot) for slot in rows]
 
 
 @app.put("/admin/schedule-slots/{slot_id}", response_model=ScheduleSlotOut)
@@ -975,26 +1018,57 @@ def batch_submit_attendance(
     session = _get_own_session(db, session_id, teacher.id)
     if session.attendance_locked:
         raise HTTPException(status_code=409, detail="Attendance is locked")
+
+    student_ids = [item["student_id"] for item in payload if isinstance(item, dict) and "student_id" in item]
+    if not student_ids:
+        return {"message": "0 attendance records saved"}
+
+    # 1. Fetch all matching students in one query
+    students = db.execute(select(User).where(User.student_id.in_(student_ids))).scalars().all()
+    user_map = {u.student_id: u for u in students}
+
+    # 2. Check enrollment in one query
+    assignment = session.assignment
+    enrolled_user_ids = set()
+    if assignment:
+        enrolled_q = select(DivisionStudent.student_user_id).where(
+            DivisionStudent.division_id == assignment.division_id
+        )
+        if assignment.batch_id:
+            enrolled_q = enrolled_q.where(DivisionStudent.batch_id == assignment.batch_id)
+        enrolled_user_ids = set(db.execute(enrolled_q).scalars().all())
+
+    # 3. Fetch all existing attendance records in one query
+    existing_att = {
+        att.student_user_id: att
+        for att in db.execute(select(Attendance).where(Attendance.session_id == session_id)).scalars().all()
+    }
+
     updated = 0
     for item in payload:
-        student = db.scalar(select(User).where(User.student_id == item["student_id"]))
-        if not student:
+        s_id = item.get("student_id")
+        user = user_map.get(s_id)
+        if not user:
             continue
-        if not _student_is_in_session(db, student.id, session):
+        if assignment and user.id not in enrolled_user_ids:
             continue
-        att = db.scalar(select(Attendance).where(
-            and_(Attendance.session_id == session_id,
-                 Attendance.student_user_id == student.id)
-        ))
+
+        att = existing_att.get(user.id)
         if att is None:
-            att = Attendance(session_id=session_id, student_user_id=student.id,
-                             presence_ratio=0.0, biometric_verified=False)
+            att = Attendance(
+                session_id=session_id, student_user_id=user.id,
+                presence_ratio=0.0, biometric_verified=False,
+            )
             db.add(att)
-        att.is_present = item["is_present"]
-        att.presence_ratio = 1.0 if item["is_present"] else 0.0
+            existing_att[user.id] = att
+
+        is_pres = bool(item.get("is_present", False))
+        att.is_present = is_pres
+        att.presence_ratio = 1.0 if is_pres else 0.0
         att.overridden_by_teacher = True
         att.override_reason = "BLE batch submit"
         updated += 1
+
     db.commit()
     return {"message": f"{updated} attendance records saved"}
 
@@ -1009,20 +1083,23 @@ def teacher_today_slots_mobile(db: Session = Depends(get_db),
         return []
     slots = db.execute(
         select(ScheduleSlot)
+        .join(TeacherAssignment, TeacherAssignment.id == ScheduleSlot.assignment_id)
         .options(
             joinedload(ScheduleSlot.assignment).joinedload(TeacherAssignment.subject),
             joinedload(ScheduleSlot.assignment).joinedload(TeacherAssignment.division),
             joinedload(ScheduleSlot.assignment).joinedload(TeacherAssignment.batch),
         )
         .where(
-            and_(ScheduleSlot.day_of_week == today, ScheduleSlot.semester_id == sem.id)
+            and_(
+                ScheduleSlot.day_of_week == today,
+                ScheduleSlot.semester_id == sem.id,
+                TeacherAssignment.teacher_user_id == teacher.id,
+            )
         ).order_by(ScheduleSlot.time_start)
     ).scalars().all()
     result = []
     for slot in slots:
         a = slot.assignment
-        if a.teacher_user_id != teacher.id:
-            continue
         result.append({
             "slot_id": slot.id,
             "assignment_id": slot.assignment_id,
@@ -1045,7 +1122,15 @@ def teacher_today_slots_mobile(db: Session = Depends(get_db),
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _get_own_session(db, session_id, teacher_id):
-    session = db.get(LectureSession, session_id)
+    session = db.execute(
+        select(LectureSession)
+        .options(
+            joinedload(LectureSession.assignment).joinedload(TeacherAssignment.subject),
+            joinedload(LectureSession.assignment).joinedload(TeacherAssignment.division),
+            joinedload(LectureSession.assignment).joinedload(TeacherAssignment.batch),
+        )
+        .where(LectureSession.id == session_id)
+    ).scalars().first()
     if not session or session.teacher_user_id != teacher_id:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
@@ -1155,21 +1240,47 @@ def _build_summary(db, session: LectureSession) -> SessionAttendanceSummary:
             .order_by(User.student_id)
         ).scalars().all()
 
+    if not all_students:
+        return SessionAttendanceSummary(
+            session_id=session.id, subject=session.subject,
+            starts_at=session.starts_at, ends_at=session.ends_at,
+            total_students=0, present_students=0, records=[],
+        )
+
+    # Pre-calculate 30-second elapsed windows once
+    ref_time = session.ends_at or datetime.utcnow()
+    total_windows = max(1, int((ref_time - session.starts_at).total_seconds() // 30))
+
+    # Batch-fetch all attendance records for this session in 1 query
+    att_map = {
+        att.student_user_id: att
+        for att in db.execute(
+            select(Attendance).where(Attendance.session_id == session.id)
+        ).scalars().all()
+    }
+
+    # Batch-fetch all detection counts for this session in 1 query
+    det_stmt = (
+        select(
+            Detection.student_user_id,
+            func.count(Detection.id).label("total_count"),
+            func.count(Detection.id).filter(Detection.proximity_ok.is_(True)).label("valid_count"),
+        )
+        .where(Detection.session_id == session.id)
+        .group_by(Detection.student_user_id)
+    )
+    det_map = {
+        row.student_user_id: (row.total_count, row.valid_count)
+        for row in db.execute(det_stmt).all()
+    }
+
     records, present = [], 0
     for user in all_students:
-        dc = db.scalar(
-            select(func.count(Detection.id)).where(
-                and_(Detection.session_id == session.id, Detection.student_user_id == user.id)
-            )
-        ) or 0
-        att = db.scalar(
-            select(Attendance).where(
-                and_(Attendance.session_id == session.id, Attendance.student_user_id == user.id)
-            )
-        )
+        dc, valid_count = det_map.get(user.id, (0, 0))
+        ratio = min(1.0, round(valid_count / total_windows, 3))
+        att = att_map.get(user.id)
         if att is None:
-            ratio = compute_presence_ratio(db, session.id, user.id)
-            # No attendance record means no biometric done → absent
+            # No attendance record means biometric not done → absent
             is_present = False
             bio, overridden, reason = False, False, None
         else:
@@ -1178,18 +1289,18 @@ def _build_summary(db, session: LectureSession) -> SessionAttendanceSummary:
                 # Teacher manually set the status – respect it
                 ratio, is_present = att.presence_ratio, att.is_present
             else:
-                # Recalculate from live detections so the dashboard
-                # stays in sync with the Excel export.
-                # Both BLE proximity AND biometric are required.
-                ratio = compute_presence_ratio(db, session.id, user.id)
+                # Both BLE proximity AND biometric are required
                 is_present = (ratio >= 0.75) and bio
+
         if is_present:
             present += 1
+
         records.append(AttendanceStudentSummary(
             student_user_id=user.id, student_id=user.student_id, student_name=user.full_name,
             detection_count=dc, presence_ratio=ratio, is_present=is_present,
             biometric_verified=bio, overridden_by_teacher=overridden, override_reason=reason,
         ))
+
     return SessionAttendanceSummary(session_id=session.id, subject=session.subject,
                                     starts_at=session.starts_at, ends_at=session.ends_at,
                                     total_students=len(records), present_students=present,

@@ -65,20 +65,20 @@ open ios/Runner.xcworkspace
 
 ---
 
-## Step 5 — Register the entitlements file
-
-The `Runner.entitlements` file is already in the repo but Xcode needs to be told about it:
+## Step 5 — Confirm Background Modes
 
 1. In Xcode, select the **Runner** project in the left sidebar
 2. Select the **Runner** target
 3. Go to **Signing & Capabilities** tab
-4. Look for the **Code Signing Entitlements** field
-5. Type `Runner/Runner.entitlements` (or click the folder icon and navigate to it)
-
-If you don't see the field directly, click **+ Capability** and add **Background Modes**. Then check:
+4. Click **+ Capability**, add **Background Modes**, and check:
 - ✅ Uses Bluetooth LE accessories
+- ✅ Acts as a Bluetooth LE accessory
+- ✅ Background fetch
 
-Adding it via Capabilities also auto-populates the entitlements — if both are ticked, you're good.
+The repository already declares the corresponding `UIBackgroundModes` values in
+`Runner/Info.plist`. The capability screen is still worth checking before a
+device build because Xcode applies the selected capabilities to signing and
+provisioning.
 
 ---
 
@@ -230,5 +230,6 @@ Make sure the iPhone has Bluetooth on and the app has been granted Bluetooth per
 **`flutter build ios` fails with provisioning errors**
 Make sure the bundle ID in Xcode matches the App ID registered at developer.apple.com, and that your device's UDID is included in the provisioning profile.
 
-**Entitlements not taking effect**
-After editing `Runner.entitlements`, do a clean build: **Product → Clean Build Folder** (Shift+Cmd+K), then rebuild.
+**Background BLE not taking effect**
+Confirm both Background Modes checkboxes are enabled, then do a clean build:
+**Product → Clean Build Folder** (Shift+Cmd+K), then rebuild.

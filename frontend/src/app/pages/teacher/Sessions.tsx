@@ -49,12 +49,14 @@ export function Sessions() {
 
   const selectedAssignmentData = (assignments as TeacherAssignment[]).find((a) => a.id === selectedAssignment) ?? null;
   const selectedSessionData = (sessions as TeacherSession[]).find((s) => s.id === selectedSession) ?? null;
+  const isActive = selectedSessionData ? (selectedSessionData.is_active || selectedSessionData.finalization_open) : false;
 
   const { data: summary } = useQuery({
     queryKey: ["attendance-summary", selectedSession],
     queryFn: () => getAttendanceSummary(selectedSession!),
     enabled: !!selectedSession,
-    refetchInterval: 15_000,
+    refetchInterval: isActive ? 15_000 : false,
+    staleTime: 10_000,
   });
 
   const summaryData = summary as AttendanceSummary | undefined;

@@ -1,0 +1,65 @@
+name: iOS build
+
+on:
+  push:
+    branches:
+      - ios-support
+  pull_request:
+    paths:
+      - "mobile/ble_attendance_mobile/**"
+      - ".github/workflows/ios-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build iOS app without signing
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install Flutter packages
+        working-directory: mobile/ble_attendance_mobile
+        run: flutter pub get
+
+      - name: Install CocoaPods dependencies
+        working-directory: mobile/ble_attendance_mobile/ios
+        run: pod install --repo-update
+
+      - name: Run Dart tests
+        working-directory: mobile/ble_attendance_mobile
+        run: flutter test --reporter expanded
+
+      - name: Analyze Flutter project
+        working-directory: mobile/ble_attendance_mobile
+        run: flutter analyze
+
+      - name: Build iOS device app without signing
+        working-directory: mobile/ble_attendance_mobile
+        run: flutter build ios --release --no-codesign
+
+      - name: Build iOS simulator app without signing
+        working-directory: mobile/ble_attendance_mobile
+        run: flutter build ios --simulator --debug --no-codesign
+
+      - name: Upload unsigned build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-builds-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            mobile/ble_attendance_mobile/build/ios/iphoneos/Runner.app
+            mobile/ble_attendance_mobile/build/ios/iphonesimulator/Runner.app

@@ -34,6 +34,11 @@
 	<array>
 		<string>bluetooth-central</string>
 		<string>bluetooth-peripheral</string>
+		<string>fetch</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.pravera.flutter_foreground_task.refresh</string>
 	</array>
 
 	<key>UIApplicationSceneManifest</key>
@@ -82,6 +87,8 @@
 	<string>This app uses Bluetooth to detect classroom attendance proximity.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>This app uses Bluetooth to advertise and scan session tokens.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>This app uses the camera for face registration and attendance verification.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>This app uses Face ID to finalize attendance.</string>
 	<key>NSLocalNetworkUsageDescription</key>

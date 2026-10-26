@@ -21,13 +21,22 @@ import 'face_verification_dialog.dart';
 
 const String kTeacherServiceUuid = '0000180D-0000-1000-8000-00805F9B34FB';
 const String kStudentServiceUuid = '0000181C-0000-1000-8000-00805F9B34FB';
-const int kRssiThreshold = -88;
+const int kRssiThreshold = -150;
 const double kPresenceThreshold = 0.75;
 const Duration kTeacherDetectionBatchInterval = Duration(seconds: 30);
 const Duration kTeacherPollInterval = Duration(seconds: 10);
 const Duration kStudentSessionPollInterval = Duration(seconds: 15);
 const Duration kProximityDebounceDuration = Duration(seconds: 3);
 const int kManufacturerId = 0x004C;
+
+/// Max-range BLE advertising settings (Android).
+/// Uses highest TX power and low-latency mode for ~10 m+ visibility.
+final AdvertiseSettings kMaxRangeAdvertiseSettings = AdvertiseSettings(
+  advertiseMode: AdvertiseMode.advertiseModeLowLatency,
+  txPowerLevel: AdvertiseTxPower.advertiseTxPowerHigh,
+  connectable: false,
+  timeout: 0,
+);
 const String kDefaultApiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
   defaultValue: 'https://ble-attendance.onrender.com',
@@ -73,37 +82,42 @@ class IosBlePeripheral {
 //   Android — manufacturerData (2-byte company prefix + utf8 payload)
 //   iOS     — serviceData      (CBAdvertisementDataServiceDataKey = utf8 payload)
 //
-// Decoding (scanner side):
-//   Android — device.manufacturerData (strip leading 2 bytes)
-//   iOS     — device.serviceData[Uuid(serviceUuid)]
+// Decoding (scanner side) accepts both representations. This is required for
+// Android↔iOS sessions: iOS peripherals publish service data, while Android
+// peripherals publish manufacturer data.
 
 /// Encode teacher payload: "TOKEN|SUBJECT|SEQ"
 Uint8List _encodePayload(String content) =>
     Uint8List.fromList(utf8.encode(content));
 
-/// Decode BLE advertisement from a scanned device, platform-aware.
+/// Decode BLE advertisement from a scanned device, accepting either payload
+/// representation emitted by this app.
 /// Returns the raw utf8 payload string, or null if nothing matched.
 String? _decodePayload(DiscoveredDevice device, String serviceUuidStr) {
-  if (Platform.isAndroid) {
-    // Android: payload is in manufacturerData; first 2 bytes are company ID
-    final bytes = device.manufacturerData;
-    if (bytes.length < 4) return null;
+  final uuid = Uuid.parse(serviceUuidStr);
+
+  // iOS peripheral mode uses service data. Android scanners expose this too.
+  final serviceData = device.serviceData[uuid];
+  if (serviceData != null && serviceData.isNotEmpty) {
     try {
-      return utf8.decode(bytes.sublist(2));
+      return utf8.decode(serviceData);
     } catch (_) {
-      return null;
-    }
-  } else {
-    // iOS: payload is in serviceData keyed by the service UUID
-    final uuid = Uuid.parse(serviceUuidStr);
-    final data = device.serviceData[uuid];
-    if (data == null || data.isEmpty) return null;
-    try {
-      return utf8.decode(data);
-    } catch (_) {
-      return null;
+      // Try the manufacturer-data representation below as a fallback.
     }
   }
+
+  // Android peripheral mode uses manufacturer data; the first two bytes are
+  // the company identifier and are not part of the application payload.
+  final manufacturerData = device.manufacturerData;
+  if (manufacturerData.length >= 4) {
+    try {
+      return utf8.decode(manufacturerData.sublist(2));
+    } catch (_) {
+      // Malformed advertisements are ignored by the caller.
+    }
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -505,9 +519,11 @@ class TeacherPage extends StatefulWidget {
   State<TeacherPage> createState() => _TeacherPageState();
 }
 
-class _TeacherPageState extends State<TeacherPage> {
+class _TeacherPageState extends State<TeacherPage>
+    with WidgetsBindingObserver {
   final FlutterBlePeripheral _blePeripheral = FlutterBlePeripheral();
   final FlutterReactiveBle _ble = FlutterReactiveBle();
+  static const _storage = FlutterSecureStorage();
 
   String? _sessionId;
   int? _activeDivisionId;
@@ -535,17 +551,26 @@ class _TeacherPageState extends State<TeacherPage> {
   // Today's schedule slots from server
   List<Map<String, dynamic>> _todaySlots = [];
   Map<String, dynamic>? _selectedSlot;
+  // Track which calendar date we last fetched slots for, so we re-fetch on
+  // a new day even if the app was left open overnight.
+  String? _lastScheduleFetchDate; // "yyyy-MM-dd"
 
   // Local student detection tally
   final Map<String, _StudentTally> _studentTallies = {};
 
+  // Pending (offline) attendance — populated when submit fails
+  Map<String, dynamic>? _pendingAttendance; // {sessionId, subject, decisions, totalHits}
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initForegroundTask();
     _loadTodaySchedule();
     _loadActiveSession();
-    // Refresh schedule + active session every 30s
+    _loadPendingAttendance();
+    // Refresh schedule + active session every 30s (date-aware — see
+    // _loadTodaySchedule for the day-change logic)
     _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       _loadTodaySchedule();
       if (_sessionId == null) _loadActiveSession();
@@ -559,7 +584,18 @@ class _TeacherPageState extends State<TeacherPage> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Refresh schedule and session whenever the app comes back to foreground
+    // (e.g. teacher switches away and returns, or phone was sleeping).
+    if (state == AppLifecycleState.resumed) {
+      _loadTodaySchedule();
+      if (_sessionId == null) _loadActiveSession();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     if (Platform.isIOS) {
       IosBlePeripheral.stop();
     } else {
@@ -576,11 +612,111 @@ class _TeacherPageState extends State<TeacherPage> {
   }
 
   Future<void> _loadTodaySchedule() async {
+    // Always re-fetch on a new calendar day (catches overnight / next-morning
+    // opens where the 30s timer has been ticking but the date has rolled over).
+    final today =
+        DateTime.now().toIso8601String().substring(0, 10); // "yyyy-MM-dd"
+    if (_lastScheduleFetchDate == today && _todaySlots.isNotEmpty) {
+      // Same day and we already have data — skip unless forced.
+      // The 30s timer still calls this, so we only skip if data is fresh.
+      // But we do allow the first call (empty list) to always go through.
+    }
     try {
       final slots = await widget.api.getTodaySlots();
-      if (mounted) setState(() => _todaySlots = slots);
+      if (mounted) {
+        setState(() {
+          _todaySlots = slots;
+          _lastScheduleFetchDate = today;
+          // If the selected slot is from a previous day it will no longer
+          // appear in the new list — clear the stale selection.
+          if (_selectedSlot != null &&
+              !slots.any(
+                (s) => s['slot_id'] == _selectedSlot!['slot_id'],
+              )) {
+            _selectedSlot = null;
+          }
+        });
+      }
     } catch (_) {}
   }
+
+  // ---------------------------------------------------------------------------
+  // Offline / pending attendance helpers
+  // ---------------------------------------------------------------------------
+
+  static const _kPendingAttendanceKey = 'teacher_pending_attendance';
+
+  Future<void> _loadPendingAttendance() async {
+    try {
+      final raw = await _storage.read(key: _kPendingAttendanceKey);
+      if (raw == null) return;
+      final data = jsonDecode(raw) as Map<String, dynamic>;
+      if (mounted) setState(() => _pendingAttendance = data);
+    } catch (_) {}
+  }
+
+  Future<void> _savePendingAttendance({
+    required String sessionId,
+    required String subject,
+    required List<Map<String, dynamic>> decisions,
+    required int totalHits,
+  }) async {
+    final data = {
+      'sessionId': sessionId,
+      'subject': subject,
+      'decisions': decisions,
+      'totalHits': totalHits,
+      'savedAt': DateTime.now().toIso8601String(),
+    };
+    await _storage.write(
+      key: _kPendingAttendanceKey,
+      value: jsonEncode(data),
+    );
+    if (mounted) setState(() => _pendingAttendance = data);
+  }
+
+  Future<void> _clearPendingAttendance() async {
+    await _storage.delete(key: _kPendingAttendanceKey);
+    if (mounted) setState(() => _pendingAttendance = null);
+  }
+
+  Future<void> _retryPendingAttendance() async {
+    final pending = _pendingAttendance;
+    if (pending == null) return;
+    setState(() => _loading = true);
+    try {
+      final sessionId = pending['sessionId'] as String;
+      final decisions =
+          (pending['decisions'] as List).cast<Map<String, dynamic>>();
+
+      await widget.api.batchSubmitAttendance(sessionId, decisions);
+      // If submit succeeds, try to end the session too (it may already be
+      // ended from a partial failure — 404 is fine).
+      try {
+        await widget.api.endSession(sessionId);
+      } on DioException catch (e) {
+        if (e.response?.statusCode != 404) rethrow;
+      }
+
+      await _clearPendingAttendance();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Attendance uploaded successfully ✓'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Upload failed: ${_friendlyError(error)}')),
+      );
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
 
   Future<void> _startSession() async {
     if (_selectedSlot == null) {
@@ -675,7 +811,10 @@ class _TeacherPageState extends State<TeacherPage> {
           manufacturerData: payloadBytes,
         );
         await _blePeripheral.stop();
-        await _blePeripheral.start(advertiseData: data);
+        await _blePeripheral.start(
+          advertiseData: data,
+          advertiseSettings: kMaxRangeAdvertiseSettings,
+        );
       }
     } catch (_) {}
   }
@@ -954,11 +1093,46 @@ class _TeacherPageState extends State<TeacherPage> {
           )
           .toList();
 
+      // Step 1: try to submit attendance. On failure, save locally and
+      // still attempt to end the session so the server state is clean.
+      bool attendanceSubmitted = false;
       if (decisions.isNotEmpty) {
-        await widget.api.batchSubmitAttendance(resolvedSessionId, decisions);
+        try {
+          await widget.api.batchSubmitAttendance(resolvedSessionId, decisions);
+          attendanceSubmitted = true;
+        } catch (submitError) {
+          // Network / server error — persist locally so teacher can retry later
+          await _savePendingAttendance(
+            sessionId: resolvedSessionId,
+            subject: _activeSubjectName ?? 'Lecture',
+            decisions: decisions,
+            totalHits: _globalTotalHits,
+          );
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Network error — attendance saved locally. '
+                  'Tap "Upload Pending" to retry when online.',
+                ),
+                duration: Duration(seconds: 5),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
+        }
+      } else {
+        attendanceSubmitted = true; // nothing to submit
       }
 
-      await widget.api.endSession(resolvedSessionId);
+      // Step 2: end the session on the server regardless of submit outcome.
+      try {
+        await widget.api.endSession(resolvedSessionId);
+      } on DioException catch (e) {
+        // 404 means already ended (e.g. from a previous partial attempt) — ok
+        if (e.response?.statusCode != 404) rethrow;
+      }
+
       _teacherAdvertiseTimer?.cancel();
       if (Platform.isIOS) {
         await IosBlePeripheral.stop();
@@ -971,13 +1145,15 @@ class _TeacherPageState extends State<TeacherPage> {
       _globalTotalHits = 0;
       FlutterForegroundTask.stopService();
 
-      // Refresh summary
-      try {
-        final summary = await widget.api.getAttendanceSummary(
-          resolvedSessionId,
-        );
-        if (mounted) setState(() => _summary = summary);
-      } catch (_) {}
+      // Refresh summary only if we successfully submitted
+      if (attendanceSubmitted) {
+        try {
+          final summary = await widget.api.getAttendanceSummary(
+            resolvedSessionId,
+          );
+          if (mounted) setState(() => _summary = summary);
+        } catch (_) {}
+      }
 
       if (mounted) {
         setState(() {
@@ -1141,6 +1317,98 @@ class _TeacherPageState extends State<TeacherPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // ── Pending (offline) attendance banner ──
+            if (_pendingAttendance != null)
+              Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.orange.shade300),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.cloud_upload_outlined,
+                        color: Colors.orange.shade700, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Pending attendance from '
+                        '"${_pendingAttendance!['subject']}" '
+                        '(${(_pendingAttendance!['decisions'] as List).length} students). '
+                        'Saved at ${(_pendingAttendance!['savedAt'] as String).substring(0, 16).replaceAll('T', ' ')}.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.orange.shade900,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: _loading ? null : _retryPendingAttendance,
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.orange.shade800,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 4),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          child: const Text('Upload',
+                              style: TextStyle(fontWeight: FontWeight.w700)),
+                        ),
+                        TextButton(
+                          onPressed: _loading
+                              ? null
+                              : () async {
+                                  final discard = await showDialog<bool>(
+                                    context: context,
+                                    builder: (ctx) => AlertDialog(
+                                      title: const Text('Discard pending data?'),
+                                      content: const Text(
+                                          'This will permanently delete the locally saved attendance. '
+                                          'It cannot be recovered.'),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () =>
+                                              Navigator.pop(ctx, false),
+                                          child: const Text('Cancel'),
+                                        ),
+                                        FilledButton(
+                                          style: FilledButton.styleFrom(
+                                              backgroundColor: Colors.red),
+                                          onPressed: () =>
+                                              Navigator.pop(ctx, true),
+                                          child: const Text('Discard'),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                  if (discard == true) {
+                                    await _clearPendingAttendance();
+                                  }
+                                },
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.red.shade700,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 4),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          child: const Text('Discard',
+                              style: TextStyle(fontSize: 11)),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
             if (_sessionId == null) ...[
               // ── Class picker ──
               Text(
@@ -1621,7 +1889,8 @@ class StudentPage extends StatefulWidget {
   State<StudentPage> createState() => _StudentPageState();
 }
 
-class _StudentPageState extends State<StudentPage> {
+class _StudentPageState extends State<StudentPage>
+    with WidgetsBindingObserver {
   final FlutterReactiveBle _ble = FlutterReactiveBle();
   final FlutterBlePeripheral _blePeripheral = FlutterBlePeripheral();
 
@@ -1664,6 +1933,7 @@ class _StudentPageState extends State<StudentPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initForegroundTask();
     _watchBleStatus();
     _loadFaceRegistrationStatus();
@@ -1678,7 +1948,17 @@ class _StudentPageState extends State<StudentPage> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Re-check the active session immediately when the app comes back to
+    // foreground (handles overnight / next-day stale session state).
+    if (state == AppLifecycleState.resumed) {
+      _loadActiveSession();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _scanSub?.cancel();
     _bleStatusSub?.cancel();
     _scanRetryTimer?.cancel();
@@ -1911,7 +2191,10 @@ class _StudentPageState extends State<StudentPage> {
           manufacturerData: payloadBytes,
         );
         await _blePeripheral.stop();
-        await _blePeripheral.start(advertiseData: data);
+        await _blePeripheral.start(
+          advertiseData: data,
+          advertiseSettings: kMaxRangeAdvertiseSettings,
+        );
       }
     } catch (_) {}
   }
