@@ -7,7 +7,7 @@ All steps that require Xcode must be done on your macOS machine.
 
 ## Prerequisites
 
-- macOS with Xcode 15+ installed (get it from the Mac App Store)
+- macOS with Xcode 15.3+ installed (get it from the Mac App Store)
 - Flutter SDK installed on macOS (`flutter --version` to verify)
 - An Apple Developer account — free works for sideloading, paid ($99/yr) is required for TestFlight
 - CocoaPods installed
@@ -95,17 +95,19 @@ Still in **Signing & Capabilities**:
 
 ## Step 7 — Verify the deployment target
 
-The minimum iOS version is already set to 13.0 in the project. Verify:
+The minimum iOS version is already set to 15.5 in the project because the
+Google ML Kit face detection dependency requires iOS 15.5 or newer. Verify:
 
 1. Select the **Runner** target → **General** tab
-2. Under **Minimum Deployments**, confirm iOS is set to **13.0** or higher
+2. Under **Minimum Deployments**, confirm iOS is set to **15.5** or higher
 
 Also check the Podfile at `ios/Podfile`:
 ```ruby
-platform :ios, '13.0'
+platform :ios, '15.5'
 ```
 
-If you change this, run `pod install` again.
+If you change this, run `pod install --repo-update` again. The Podfile also
+excludes the unsupported `armv7` architecture required by ML Kit.
 
 ---
 

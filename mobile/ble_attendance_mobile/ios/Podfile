@@ -1,4 +1,7 @@
-platform :ios, '13.0'
+platform :ios, '15.5'
+
+# google_mlkit_commons and google_mlkit_face_detection require iOS 15.5.
+$iOSVersion = '15.5'
 
 # Disable CocoaPods analytics to make CI and local builds deterministic.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -41,8 +44,18 @@ target 'Runner' do
 end
 
 post_install do |installer|
+  installer.pods_project.build_configurations.each do |config|
+    config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = $iOSVersion
+    config.build_settings['EXCLUDED_ARCHS[sdk=*]'] = 'armv7'
+  end
+
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+
+    target.build_configurations.each do |config|
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = $iOSVersion
+      config.build_settings['EXCLUDED_ARCHS[sdk=*]'] = 'armv7'
+    end
 
     # permission_handler disables permission groups unless their iOS macros
     # are enabled. The app requests both Bluetooth and camera access.
