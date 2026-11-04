@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:android_intent_plus/android_intent.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_ble_peripheral/flutter_ble_peripheral.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
@@ -39,7 +40,7 @@ final AdvertiseSettings kMaxRangeAdvertiseSettings = AdvertiseSettings(
 );
 const String kDefaultApiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
-  defaultValue: 'https://ble-attendance.onrender.com',
+  defaultValue: 'https://ble-attendance-api.onrender.com',
 );
 
 // ---------------------------------------------------------------------------
@@ -448,6 +449,9 @@ class _TeacherPageState extends State<TeacherPage>
   static const _storage = FlutterSecureStorage();
 
   String? _sessionId;
+  bool _serverSessionCreated = false;
+  int? _activeAssignmentId;
+  Timer? _serverSyncTimer;
   int? _activeDivisionId;
   int? _activeBatchId;
   String? _activeDivisionStartStudentId;
@@ -524,6 +528,7 @@ class _TeacherPageState extends State<TeacherPage>
     _scanCycleTimer?.cancel();
     _refreshTimer?.cancel();
     _sessionActiveTimer?.cancel();
+    _serverSyncTimer?.cancel();
     _teacherAdvertiseTimer?.cancel();
     FlutterForegroundTask.stopService();
     super.dispose();
@@ -575,12 +580,14 @@ class _TeacherPageState extends State<TeacherPage>
 
   Future<void> _savePendingAttendance({
     required String sessionId,
+    int? assignmentId,
     required String subject,
     required List<Map<String, dynamic>> decisions,
     required int totalHits,
   }) async {
     final data = {
       'sessionId': sessionId,
+      'assignmentId': assignmentId,
       'subject': subject,
       'decisions': decisions,
       'totalHits': totalHits,
@@ -603,9 +610,25 @@ class _TeacherPageState extends State<TeacherPage>
     if (pending == null) return;
     setState(() => _loading = true);
     try {
-      final sessionId = pending['sessionId'] as String;
+      var sessionId = pending['sessionId'] as String;
+      final assignmentId = pending['assignmentId'] as int?;
+      final subject = (pending['subject'] as String?) ?? 'Lecture';
       final decisions =
           (pending['decisions'] as List).cast<Map<String, dynamic>>();
+
+      // If the session was started offline without a server session ID,
+      // create the server session now that network is available.
+      if (sessionId.startsWith('offline-') || sessionId.startsWith('local-')) {
+        if (assignmentId != null) {
+          final newSession = await widget.api.startSession(
+            subject,
+            assignmentId: assignmentId,
+          );
+          sessionId = newSession['id'] as String;
+        } else {
+          throw Exception('Missing assignment ID to create server session.');
+        }
+      }
 
       await widget.api.batchSubmitAttendance(sessionId, decisions);
       // If submit succeeds, try to end the session too (it may already be
@@ -652,17 +675,18 @@ class _TeacherPageState extends State<TeacherPage>
       final subjectName = _selectedSlot!['subject_name'] as String;
       final assignmentId = _selectedSlot!['assignment_id'] as int;
       final divisionId = _selectedSlot!['division_id'] as int;
-      final session = await widget.api.startSession(
-        subjectName,
-        assignmentId: assignmentId,
-      );
-      _sessionId = session['id'] as String;
+
+      // 1. Start the session locally immediately without waiting for server network response
+      final tempSessionId = 'offline-${DateTime.now().millisecondsSinceEpoch}';
+      _sessionId = tempSessionId;
+      _serverSessionCreated = false;
+      _activeAssignmentId = assignmentId;
       _activeDivisionId = divisionId;
       _activeBatchId = _selectedSlot!['batch_id'] as int?;
       _activeDivisionStartStudentId =
           _selectedSlot!['start_student_id'] as String?;
       _activeDivisionEndStudentId = _selectedSlot!['end_student_id'] as String?;
-      _finalizationOpen = (session['finalization_open'] as bool?) ?? false;
+      _finalizationOpen = false;
 
       _globalTotalHits = 0;
       _activeSubjectName = subjectName;
@@ -671,11 +695,15 @@ class _TeacherPageState extends State<TeacherPage>
       _verifiedStudents.clear();
       _studentNames = {};
       _isAdvertising = true;
+
+      // 2. Start local BLE scanning, foreground task, and advertising right away
       _startStudentScan();
       _startForegroundService('Teaching: $subjectName');
       _startTeacherAdvertising(subjectName);
-      if (mounted) setState(() {});
-      _fetchStudentNames(_sessionId!);
+      if (mounted) setState(() => _loading = false);
+
+      // 3. Handshake with server in the background (retry every 5 seconds until session ID is received)
+      _startBackgroundServerSync(subjectName, assignmentId);
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -684,6 +712,50 @@ class _TeacherPageState extends State<TeacherPage>
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  void _startBackgroundServerSync(String subjectName, int assignmentId) {
+    _serverSyncTimer?.cancel();
+
+    Future<void> attemptSync() async {
+      if (_serverSessionCreated || _sessionId == null) {
+        _serverSyncTimer?.cancel();
+        _serverSyncTimer = null;
+        return;
+      }
+      try {
+        final session = await widget.api.startSession(
+          subjectName,
+          assignmentId: assignmentId,
+        );
+        if (!mounted || _sessionId == null) return;
+        final serverId = session['id'] as String;
+        _sessionId = serverId;
+        _serverSessionCreated = true;
+        _serverSyncTimer?.cancel();
+        _serverSyncTimer = null;
+
+        // If teacher opened finalization while offline, sync it to server now
+        if (_finalizationOpen) {
+          try {
+            await widget.api.openFinalization(serverId);
+          } catch (_) {}
+        }
+
+        // Fetch roster student names from server
+        _fetchStudentNames(serverId);
+        if (mounted) setState(() {});
+      } catch (_) {
+        // Offline / server unreachable; will retry every 5 seconds
+      }
+    }
+
+    // Attempt immediately once
+    attemptSync();
+    // And repeat every 5 seconds while teaching until session ID is acquired from server
+    _serverSyncTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      attemptSync();
+    });
   }
 
   Future<void> _startTeacherAdvertising(String subjectName) async {
@@ -985,21 +1057,30 @@ class _TeacherPageState extends State<TeacherPage>
       if (confirm != true) return;
     }
 
+    _serverSyncTimer?.cancel();
+    _serverSyncTimer = null;
+
     var sessionId = _sessionId;
-    if (sessionId == null) {
-      try {
-        final active = await widget.api.getActiveSession();
-        sessionId = active['id'] as String;
-      } catch (_) {
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('No active session.')));
+    final assignmentId = _activeAssignmentId;
+
+    // If still offline, try one last sync now that session is ending
+    if (sessionId == null || sessionId.startsWith('offline-') || !_serverSessionCreated) {
+      if (assignmentId != null) {
+        try {
+          final serverSession = await widget.api.startSession(
+            _activeSubjectName ?? 'Lecture',
+            assignmentId: assignmentId,
+          );
+          sessionId = serverSession['id'] as String;
+          _sessionId = sessionId;
+          _serverSessionCreated = true;
+        } catch (_) {
+          // Still offline
         }
-        return;
       }
     }
-    final resolvedSessionId = sessionId;
+
+    final resolvedSessionId = sessionId ?? 'offline-${DateTime.now().millisecondsSinceEpoch}';
     setState(() => _loading = true);
     try {
       final decisions = _studentTallies.values
@@ -1016,17 +1097,39 @@ class _TeacherPageState extends State<TeacherPage>
           )
           .toList();
 
-      // Step 1: try to submit attendance. On failure, save locally and
-      // still attempt to end the session so the server state is clean.
       bool attendanceSubmitted = false;
       if (decisions.isNotEmpty) {
-        try {
-          await widget.api.batchSubmitAttendance(resolvedSessionId, decisions);
-          attendanceSubmitted = true;
-        } catch (submitError) {
-          // Network / server error — persist locally so teacher can retry later
+        if (_serverSessionCreated && !resolvedSessionId.startsWith('offline-')) {
+          try {
+            await widget.api.batchSubmitAttendance(resolvedSessionId, decisions);
+            attendanceSubmitted = true;
+          } catch (submitError) {
+            // Save locally
+            await _savePendingAttendance(
+              sessionId: resolvedSessionId,
+              assignmentId: assignmentId,
+              subject: _activeSubjectName ?? 'Lecture',
+              decisions: decisions,
+              totalHits: _globalTotalHits,
+            );
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Network error — attendance saved locally. '
+                    'Tap "Upload Pending" to retry when online.',
+                  ),
+                  duration: Duration(seconds: 5),
+                  backgroundColor: Colors.orange,
+                ),
+              );
+            }
+          }
+        } else {
+          // Session run completely offline — save with assignment ID for later upload
           await _savePendingAttendance(
             sessionId: resolvedSessionId,
+            assignmentId: assignmentId,
             subject: _activeSubjectName ?? 'Lecture',
             decisions: decisions,
             totalHits: _globalTotalHits,
@@ -1035,8 +1138,8 @@ class _TeacherPageState extends State<TeacherPage>
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
                 content: Text(
-                  'Network error — attendance saved locally. '
-                  'Tap "Upload Pending" to retry when online.',
+                  'Session ended offline. Attendance saved locally. '
+                  'Tap "Upload Pending" to upload when online.',
                 ),
                 duration: Duration(seconds: 5),
                 backgroundColor: Colors.orange,
@@ -1045,15 +1148,16 @@ class _TeacherPageState extends State<TeacherPage>
           }
         }
       } else {
-        attendanceSubmitted = true; // nothing to submit
+        attendanceSubmitted = true;
       }
 
-      // Step 2: end the session on the server regardless of submit outcome.
-      try {
-        await widget.api.endSession(resolvedSessionId);
-      } on DioException catch (e) {
-        // 404 means already ended (e.g. from a previous partial attempt) — ok
-        if (e.response?.statusCode != 404) rethrow;
+      // Step 2: end the session on server if session was created
+      if (_serverSessionCreated && !resolvedSessionId.startsWith('offline-')) {
+        try {
+          await widget.api.endSession(resolvedSessionId);
+        } on DioException catch (e) {
+          if (e.response?.statusCode != 404) rethrow;
+        }
       }
 
       _teacherAdvertiseTimer?.cancel();
@@ -1064,8 +1168,7 @@ class _TeacherPageState extends State<TeacherPage>
       _globalTotalHits = 0;
       FlutterForegroundTask.stopService();
 
-      // Refresh summary only if we successfully submitted
-      if (attendanceSubmitted) {
+      if (attendanceSubmitted && _serverSessionCreated && !resolvedSessionId.startsWith('offline-')) {
         try {
           final summary = await widget.api.getAttendanceSummary(
             resolvedSessionId,
@@ -1077,6 +1180,8 @@ class _TeacherPageState extends State<TeacherPage>
       if (mounted) {
         setState(() {
           _sessionId = null;
+          _serverSessionCreated = false;
+          _activeAssignmentId = null;
           _finalizationOpen = false;
           _activeSubjectName = null;
           _activeBatchId = null;
@@ -1106,6 +1211,8 @@ class _TeacherPageState extends State<TeacherPage>
 
       setState(() {
         _sessionId = activeId;
+        _serverSessionCreated = true;
+        _activeAssignmentId = session['assignment_id'] as int?;
         _finalizationOpen = activeFinalization;
         _activeSubjectName = activeSubject;
         _activeSubjectCode = activeSubjectCode;
@@ -1159,31 +1266,31 @@ class _TeacherPageState extends State<TeacherPage>
   Future<void> _openFinalization() async {
     final sessionId = _sessionId;
     if (sessionId == null) return;
-    setState(() => _loading = true);
-    try {
-      final session = await widget.api.openFinalization(sessionId);
-      if (!mounted) return;
-      setState(() {
-        _finalizationOpen = (session['finalization_open'] as bool?) ?? true;
-      });
-      // Keep advertising — payload now includes |F flag for students to detect finalization via BLE
-      final subjectName = _activeSubjectName ?? '';
-      await _updateTeacherAdvertisingPayload(subjectName);
-      if (!mounted) return;
+
+    // Immediately open finalization locally so BLE payload broadcasts |F to students
+    setState(() {
+      _finalizationOpen = true;
+    });
+
+    final subjectName = _activeSubjectName ?? '';
+    await _updateTeacherAdvertisingPayload(subjectName);
+
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Finalization opened for students.')),
       );
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(_friendlyError(error))));
-    } finally {
-      if (mounted) setState(() => _loading = false);
+    }
+
+    // If server session is already linked, notify the server too
+    if (_serverSessionCreated && !sessionId.startsWith('offline-')) {
+      try {
+        await widget.api.openFinalization(sessionId);
+      } catch (_) {}
     }
   }
 
   Future<void> _logout() async {
+    _serverSyncTimer?.cancel();
     _teacherAdvertiseTimer?.cancel();
     await _blePeripheral.stop();
     _scanSub?.cancel();
@@ -3190,17 +3297,22 @@ String _friendlyError(Object error) {
   return error.toString();
 }
 
-String _normalizeBaseUrl(String input) {
+String normalizeBaseUrl(String input, {bool isRelease = kReleaseMode}) {
   final raw = input.trim();
   if (raw.isEmpty) throw Exception('Server URL is required.');
   final withScheme = raw.startsWith('http://') || raw.startsWith('https://')
       ? raw
-      : 'http://$raw';
+      : 'https://$raw';
   final uri = Uri.tryParse(withScheme);
   if (uri == null || uri.host.isEmpty) {
     throw Exception('Enter a valid server URL.');
+  }
+  if (isRelease && withScheme.startsWith('http://')) {
+    throw Exception('Production builds require HTTPS. Please use an https:// URL.');
   }
   return withScheme.endsWith('/')
       ? withScheme.substring(0, withScheme.length - 1)
       : withScheme;
 }
+
+String _normalizeBaseUrl(String input) => normalizeBaseUrl(input);

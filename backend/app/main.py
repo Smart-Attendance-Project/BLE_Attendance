@@ -185,6 +185,48 @@ def change_password(
 
 
 MAX_FACE_REGISTRATIONS_PER_MONTH = 2
+FACE_REGISTRATION_WINDOW_DAYS = 30
+
+
+def _check_and_update_face_reg_timestamps(user: User, now: datetime) -> list[str]:
+    """
+    Enforce rolling monthly limit on face registration and re-registration.
+    Prunes timestamps older than FACE_REGISTRATION_WINDOW_DAYS (30 days).
+    Raises HTTPException(429) if user has reached MAX_FACE_REGISTRATIONS_PER_MONTH.
+    Returns the new updated list of timestamps.
+    """
+    raw_timestamps = user.face_reg_timestamps or []
+    window_start = now - timedelta(days=FACE_REGISTRATION_WINDOW_DAYS)
+
+    valid_dts: list[datetime] = []
+    for ts_str in raw_timestamps:
+        try:
+            dt = datetime.fromisoformat(ts_str)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=IST)
+            else:
+                dt = dt.astimezone(IST)
+            if dt >= window_start:
+                valid_dts.append(dt)
+        except (ValueError, TypeError):
+            continue
+
+    valid_dts.sort()
+
+    if len(valid_dts) >= MAX_FACE_REGISTRATIONS_PER_MONTH:
+        earliest = valid_dts[0]
+        retry_after_dt = earliest + timedelta(days=FACE_REGISTRATION_WINDOW_DAYS)
+        retry_seconds = max(1, int((retry_after_dt - now).total_seconds()))
+        date_str = retry_after_dt.strftime("%Y-%m-%d %H:%M:%S")
+        raise HTTPException(
+            status_code=429,
+            detail=f"Monthly face registration limit of {MAX_FACE_REGISTRATIONS_PER_MONTH} reached. Next registration allowed after {date_str}.",
+            headers={"Retry-After": str(retry_seconds)},
+        )
+
+    updated_iso = [dt.isoformat() for dt in valid_dts]
+    updated_iso.append(now.isoformat())
+    return updated_iso
 
 
 @app.post("/auth/register-face")
@@ -198,11 +240,15 @@ def register_face(
     if not embedding or not isinstance(embedding, list):
         raise HTTPException(status_code=422, detail="embedding must be a list of floats")
 
+    from sqlalchemy.orm.attributes import flag_modified
+
     now = _now_ist()
+    updated_timestamps = _check_and_update_face_reg_timestamps(user, now)
+
     user.face_embedding = [embedding]  # Save as a list containing the primary embedding
-    timestamps = user.face_reg_timestamps or []
-    timestamps.append(now.isoformat())
-    user.face_reg_timestamps = timestamps
+    user.face_reg_timestamps = updated_timestamps
+    flag_modified(user, "face_reg_timestamps")
+    flag_modified(user, "face_embedding")
     db.commit()
     return {"message": "Face registered", "face_registered": True}
 
@@ -230,6 +276,9 @@ def re_register_face(
 
     from sqlalchemy.orm.attributes import flag_modified
 
+    now = _now_ist()
+    updated_timestamps = _check_and_update_face_reg_timestamps(user, now)
+
     # Verify vector embedding matches existing registered face if present
     if user.face_embedding:
         existing_list = user.face_embedding
@@ -255,11 +304,10 @@ def re_register_face(
         flag_modified(user, "face_embedding")
     else:
         user.face_embedding = [embedding]
+        flag_modified(user, "face_embedding")
 
-    now = _now_ist()
-    timestamps = user.face_reg_timestamps or []
-    timestamps.append(now.isoformat())
-    user.face_reg_timestamps = timestamps
+    user.face_reg_timestamps = updated_timestamps
+    flag_modified(user, "face_reg_timestamps")
     db.commit()
     return {"message": "Face re-registered", "face_registered": True}
 
