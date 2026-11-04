@@ -64,8 +64,7 @@ void main() {
     test('exports XML file directly into BLE_Attendance date folder', () async {
       final tmpDir = await Directory.systemTemp.createTemp('ble_test_');
       try {
-        final date = DateTime(2026, 11, 4);
-        final dateStr = '2026-11-04';
+        const dateStr = '2026-11-04';
         final targetSubdir = Directory('${tmpDir.path}/BLE_Attendance/$dateStr');
 
         final file = await OfflineAttendanceExporter.exportAttendanceXml(
