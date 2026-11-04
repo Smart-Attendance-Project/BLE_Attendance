@@ -5,6 +5,8 @@ from fastapi import HTTPException
 
 from app.main import (
     _build_summary,
+    register_face,
+    re_register_face,
     _session_out,
     _student_is_in_session,
     batch_submit_attendance,
@@ -367,3 +369,57 @@ def test_active_session_lookup_returns_latest_matching_session(world, db):
 
     assert older.id != newer.id
     assert found.id == newer.id
+
+
+
+def test_face_registration_and_reregistration_within_limit(world, db):
+    student = world["in_range"]
+    student.face_embedding = None
+    student.face_reg_timestamps = []
+    db.commit()
+
+    emb1 = [0.1] * 128
+    res1 = register_face({"embedding": emb1}, db=db, user=student)
+    assert res1["face_registered"] is True
+    assert len(student.face_reg_timestamps) == 1
+
+    emb2 = [0.12] * 128  # very close distance
+    res2 = re_register_face({"embedding": emb2}, db=db, user=student)
+    assert res2["face_registered"] is True
+    assert len(student.face_reg_timestamps) == 2
+
+
+def test_face_registration_limit_enforces_429(world, db):
+    student = world["in_range"]
+    student.face_embedding = [[0.1] * 128]
+    now = datetime.now()
+    student.face_reg_timestamps = [
+        (now - timedelta(days=2)).isoformat(),
+        (now - timedelta(days=1)).isoformat(),
+    ]
+    db.commit()
+
+    emb3 = [0.11] * 128
+    with pytest.raises(HTTPException) as exc:
+        re_register_face({"embedding": emb3}, db=db, user=student)
+
+    assert exc.value.status_code == 429
+    assert "limit" in exc.value.detail.lower()
+    assert "Retry-After" in exc.value.headers
+
+
+def test_face_registration_prunes_expired_timestamps_and_allows_reregister(world, db):
+    student = world["in_range"]
+    student.face_embedding = [[0.1] * 128]
+    now = datetime.now()
+    student.face_reg_timestamps = [
+        (now - timedelta(days=35)).isoformat(),  # expired (> 30 days)
+        (now - timedelta(days=5)).isoformat(),   # valid
+    ]
+    db.commit()
+
+    emb = [0.11] * 128
+    res = re_register_face({"embedding": emb}, db=db, user=student)
+    assert res["face_registered"] is True
+    # The 35-day-old timestamp was pruned; now contains 5-day-old + new timestamp
+    assert len(student.face_reg_timestamps) == 2
