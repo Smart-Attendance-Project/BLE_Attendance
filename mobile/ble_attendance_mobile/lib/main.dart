@@ -369,26 +369,29 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                       const SizedBox(height: 8),
                       // Server URL (collapsed by default)
-                      ExpansionTile(
-                        tilePadding: EdgeInsets.zero,
-                        title: Text(
-                          'Server URL',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: cs.onSurface.withAlpha(160),
-                          ),
-                        ),
-                        children: [
-                          TextField(
-                            controller: _serverUrlCtrl,
-                            decoration: const InputDecoration(
-                              labelText: 'API base URL',
-                              prefixIcon: Icon(Icons.dns_outlined),
+                      Material(
+                        color: Colors.transparent,
+                        child: ExpansionTile(
+                          tilePadding: EdgeInsets.zero,
+                          title: Text(
+                            'Server URL',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: cs.onSurface.withAlpha(160),
                             ),
-                            keyboardType: TextInputType.url,
                           ),
-                          const SizedBox(height: 8),
-                        ],
+                          children: [
+                            TextField(
+                              controller: _serverUrlCtrl,
+                              decoration: const InputDecoration(
+                                labelText: 'API base URL',
+                                prefixIcon: Icon(Icons.dns_outlined),
+                              ),
+                              keyboardType: TextInputType.url,
+                            ),
+                            const SizedBox(height: 8),
+                          ],
+                        ),
                       ),
                       const SizedBox(height: 8),
                       FilledButton(
