@@ -14,6 +14,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import 'face_registration_page.dart';
 import 'face_verification_dialog.dart';
+import 'offline_attendance_page.dart';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -488,6 +489,7 @@ class _TeacherPageState extends State<TeacherPage>
 
   // Pending (offline) attendance — populated when submit fails
   Map<String, dynamic>? _pendingAttendance; // {sessionId, subject, decisions, totalHits}
+  List<Map<String, dynamic>> _pendingAttendances = [];
 
   @override
   void initState() {
@@ -570,13 +572,35 @@ class _TeacherPageState extends State<TeacherPage>
   // ---------------------------------------------------------------------------
 
   static const _kPendingAttendanceKey = 'teacher_pending_attendance';
+  static const _kPendingAttendancesKey = 'teacher_pending_attendances';
 
   Future<void> _loadPendingAttendance() async {
     try {
-      final raw = await _storage.read(key: _kPendingAttendanceKey);
-      if (raw == null) return;
-      final data = jsonDecode(raw) as Map<String, dynamic>;
-      if (mounted) setState(() => _pendingAttendance = data);
+      List<Map<String, dynamic>> loaded = [];
+      final rawList = await _storage.read(key: _kPendingAttendancesKey);
+      if (rawList != null && rawList.trim().isNotEmpty) {
+        final decoded = jsonDecode(rawList);
+        if (decoded is List) {
+          loaded = decoded
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList();
+        }
+      }
+      if (loaded.isEmpty) {
+        final rawSingle = await _storage.read(key: _kPendingAttendanceKey);
+        if (rawSingle != null && rawSingle.trim().isNotEmpty) {
+          final decoded = jsonDecode(rawSingle);
+          if (decoded is Map) {
+            loaded = [Map<String, dynamic>.from(decoded)];
+          }
+        }
+      }
+      if (mounted) {
+        setState(() {
+          _pendingAttendances = loaded;
+          _pendingAttendance = loaded.isNotEmpty ? loaded.first : null;
+        });
+      }
     } catch (_) {}
   }
 
@@ -595,28 +619,65 @@ class _TeacherPageState extends State<TeacherPage>
       'totalHits': totalHits,
       'savedAt': DateTime.now().toIso8601String(),
     };
+
+    final current = List<Map<String, dynamic>>.from(_pendingAttendances);
+    current.removeWhere((item) => item['sessionId'] == sessionId);
+    current.insert(0, data);
+
+    await _storage.write(
+      key: _kPendingAttendancesKey,
+      value: jsonEncode(current),
+    );
     await _storage.write(
       key: _kPendingAttendanceKey,
       value: jsonEncode(data),
     );
-    if (mounted) setState(() => _pendingAttendance = data);
+    if (mounted) {
+      setState(() {
+        _pendingAttendances = current;
+        _pendingAttendance = data;
+      });
+    }
   }
 
-  Future<void> _clearPendingAttendance() async {
-    await _storage.delete(key: _kPendingAttendanceKey);
-    if (mounted) setState(() => _pendingAttendance = null);
+  Future<void> _discardSpecificPendingAttendance(String sessionId) async {
+    final current = List<Map<String, dynamic>>.from(_pendingAttendances);
+    current.removeWhere((item) => item['sessionId'] == sessionId);
+    await _storage.write(
+      key: _kPendingAttendancesKey,
+      value: jsonEncode(current),
+    );
+    if (current.isEmpty) {
+      await _storage.delete(key: _kPendingAttendanceKey);
+      if (mounted) {
+        setState(() {
+          _pendingAttendances = [];
+          _pendingAttendance = null;
+        });
+      }
+    } else {
+      await _storage.write(
+        key: _kPendingAttendanceKey,
+        value: jsonEncode(current.first),
+      );
+      if (mounted) {
+        setState(() {
+          _pendingAttendances = current;
+          _pendingAttendance = current.first;
+        });
+      }
+    }
   }
 
-  Future<void> _retryPendingAttendance() async {
-    final pending = _pendingAttendance;
-    if (pending == null) return;
+  Future<void> _uploadSpecificPendingAttendance(
+      Map<String, dynamic> session) async {
     setState(() => _loading = true);
     try {
-      var sessionId = pending['sessionId'] as String;
-      final assignmentId = pending['assignmentId'] as int?;
-      final subject = (pending['subject'] as String?) ?? 'Lecture';
+      var sessionId = session['sessionId'] as String;
+      final assignmentId = session['assignmentId'] as int?;
+      final subject = (session['subject'] as String?) ?? 'Lecture';
       final decisions =
-          (pending['decisions'] as List).cast<Map<String, dynamic>>();
+          (session['decisions'] as List).cast<Map<String, dynamic>>();
 
       // If the session was started offline without a server session ID,
       // create the server session now that network is available.
@@ -641,7 +702,7 @@ class _TeacherPageState extends State<TeacherPage>
         if (e.response?.statusCode != 404) rethrow;
       }
 
-      await _clearPendingAttendance();
+      await _discardSpecificPendingAttendance(session['sessionId'] as String);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -654,9 +715,21 @@ class _TeacherPageState extends State<TeacherPage>
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Upload failed: ${_friendlyError(error)}')),
       );
+      rethrow;
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  String _formatPendingDateTime(String? raw) {
+    if (raw == null || raw.isEmpty) return 'Date & Time: Unknown';
+    if (raw.contains('T')) {
+      final parts = raw.split('T');
+      final date = parts[0];
+      final time = parts[1].split('.').first;
+      return 'Date: $date  •  Time: $time';
+    }
+    return 'Date/Time: $raw';
   }
 
   // ---------------------------------------------------------------------------
@@ -1089,15 +1162,32 @@ class _TeacherPageState extends State<TeacherPage>
           .map(
             (t) => {
               'student_id': t.studentId,
+              'student_name': _studentNames[t.studentId] ?? t.studentId,
               'is_present':
                   t.hits > 0 &&
                   _globalTotalHits > 0 &&
                   (t.hits / _globalTotalHits) >= 0.75,
               'hits': t.hits,
               'total': _globalTotalHits,
+              'verified': t.biometricVerified ||
+                  (_verifiedStudents[t.studentId] == true),
             },
           )
           .toList();
+
+      final talliedIds = _studentTallies.keys.toSet();
+      for (final entry in _studentNames.entries) {
+        if (!talliedIds.contains(entry.key)) {
+          decisions.add({
+            'student_id': entry.key,
+            'student_name': entry.value,
+            'is_present': false,
+            'hits': 0,
+            'total': _globalTotalHits,
+            'verified': false,
+          });
+        }
+      }
 
       bool attendanceSubmitted = false;
       if (decisions.isNotEmpty) {
@@ -1324,6 +1414,40 @@ class _TeacherPageState extends State<TeacherPage>
         actions: [
           IconButton(
             onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => OfflineAttendanceListPage(
+                    sessions: _pendingAttendances,
+                    onUpload: _uploadSpecificPendingAttendance,
+                    onDiscard: _discardSpecificPendingAttendance,
+                  ),
+                ),
+              );
+            },
+            icon: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                const Icon(Icons.cloud_off_rounded),
+                if (_pendingAttendances.isNotEmpty)
+                  Positioned(
+                    right: -2,
+                    top: -2,
+                    child: Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        color: Colors.amber,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            tooltip: 'Offline / Pending Attendance',
+          ),
+          IconButton(
+            onPressed: () {
               _loadTodaySchedule();
               if (_sessionId == null) _loadActiveSession();
             },
@@ -1343,94 +1467,132 @@ class _TeacherPageState extends State<TeacherPage>
           children: [
             // ── Pending (offline) attendance banner ──
             if (_pendingAttendance != null)
-              Container(
+              Card(
                 margin: const EdgeInsets.only(bottom: 12),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 10,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: BorderSide(color: Colors.orange.shade300),
                 ),
-                decoration: BoxDecoration(
-                  color: Colors.orange.shade50,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.orange.shade300),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.cloud_upload_outlined,
-                        color: Colors.orange.shade700, size: 20),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Pending attendance from '
-                        '"${_pendingAttendance!['subject']}" '
-                        '(${(_pendingAttendance!['decisions'] as List).length} students). '
-                        'Saved at ${(_pendingAttendance!['savedAt'] as String).substring(0, 16).replaceAll('T', ' ')}.',
+                elevation: 0,
+                color: Colors.white,
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.cloud_off_rounded,
+                              color: Colors.orange.shade800, size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '${_pendingAttendance!['subject']} (${_pendingAttendance!['sessionId']})',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.orange.shade100,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              'Offline',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.orange.shade900,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        _formatPendingDateTime(
+                            _pendingAttendance!['savedAt']?.toString()),
                         style: TextStyle(
                           fontSize: 12,
-                          color: Colors.orange.shade900,
+                          color: Colors.grey.shade700,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        TextButton(
-                          onPressed: _loading ? null : _retryPendingAttendance,
-                          style: TextButton.styleFrom(
-                            foregroundColor: Colors.orange.shade800,
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 4),
-                            minimumSize: Size.zero,
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          ),
-                          child: const Text('Upload',
-                              style: TextStyle(fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.orange.shade200),
                         ),
-                        TextButton(
-                          onPressed: _loading
-                              ? null
-                              : () async {
-                                  final discard = await showDialog<bool>(
-                                    context: context,
-                                    builder: (ctx) => AlertDialog(
-                                      title: const Text('Discard pending data?'),
-                                      content: const Text(
-                                          'This will permanently delete the locally saved attendance. '
-                                          'It cannot be recovered.'),
-                                      actions: [
-                                        TextButton(
-                                          onPressed: () =>
-                                              Navigator.pop(ctx, false),
-                                          child: const Text('Cancel'),
-                                        ),
-                                        FilledButton(
-                                          style: FilledButton.styleFrom(
-                                              backgroundColor: Colors.red),
-                                          onPressed: () =>
-                                              Navigator.pop(ctx, true),
-                                          child: const Text('Discard'),
-                                        ),
-                                      ],
+                        child: Text(
+                          'You can upload this attendance. Previously it was not stored on the server, but now that your phone is connected to the server, you can send it.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.orange.shade900,
+                            height: 1.3,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        OfflineAttendanceDetailsPage(
+                                      session: _pendingAttendance!,
+                                      onUpload:
+                                          _uploadSpecificPendingAttendance,
                                     ),
-                                  );
-                                  if (discard == true) {
-                                    await _clearPendingAttendance();
-                                  }
-                                },
-                          style: TextButton.styleFrom(
-                            foregroundColor: Colors.red.shade700,
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 4),
-                            minimumSize: Size.zero,
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                );
+                              },
+                              icon: const Icon(Icons.visibility_outlined,
+                                  size: 16),
+                              label: const Text('Show'),
+                              style: OutlinedButton.styleFrom(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 10),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                            ),
                           ),
-                          child: const Text('Discard',
-                              style: TextStyle(fontSize: 11)),
-                        ),
-                      ],
-                    ),
-                  ],
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: FilledButton.icon(
+                              onPressed: _loading
+                                  ? null
+                                  : () => _uploadSpecificPendingAttendance(
+                                      _pendingAttendance!),
+                              icon: const Icon(Icons.cloud_upload_outlined,
+                                  size: 16),
+                              label: const Text('Upload'),
+                              style: FilledButton.styleFrom(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 10),
+                                backgroundColor: Colors.orange.shade800,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
             if (_sessionId == null) ...[
