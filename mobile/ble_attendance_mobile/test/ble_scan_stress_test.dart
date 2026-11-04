@@ -1,21 +1,21 @@
-/// BLE Scan Handler Stress Test
-/// ==============================
-/// Tests the teacher-side BLE scan logic WITHOUT real hardware by pumping
-/// synthetic DiscoveredDevice events through the exact same parsing and
-/// state-update functions that run in production.
-///
-/// What this catches
-/// -----------------
-///  1. Payload parser crashes on any of the 70 student ID formats
-///  2. Incorrect deduplication (same student counted twice)
-///  3. Division/batch filter dropping students it should accept
-///  4. Division range filter (start/end student ID) working correctly
-///  5. setState storm — 70 rapid events should complete in < 1 s wall time
-///  6. Edge cases: empty payload, garbage bytes, teacher beacon leaking through
-///
-/// Run with:
-///   flutter test test/ble_scan_stress_test.dart
-///   flutter test test/ble_scan_stress_test.dart --reporter expanded
+// BLE Scan Handler Stress Test
+// ==============================
+// Tests the teacher-side BLE scan logic WITHOUT real hardware by pumping
+// synthetic DiscoveredDevice events through the exact same parsing and
+// state-update functions that run in production.
+//
+// What this catches
+// -----------------
+//  1. Payload parser crashes on any of the 70 student ID formats
+//  2. Incorrect deduplication (same student counted twice)
+//  3. Division/batch filter dropping students it should accept
+//  4. Division range filter (start/end student ID) working correctly
+//  5. setState storm — 70 rapid events should complete in < 1 s wall time
+//  6. Edge cases: empty payload, garbage bytes, teacher beacon leaking through
+//
+// Run with:
+//   flutter test test/ble_scan_stress_test.dart
+//   flutter test test/ble_scan_stress_test.dart --reporter expanded
 
 import 'dart:convert';
 import 'dart:typed_data';
@@ -141,9 +141,13 @@ Map<String, StudentTally> runScanHandler({
 
     // Range filter
     if (startStudentId != null &&
-        studentId.compareTo(startStudentId) < 0) continue;
+        studentId.compareTo(startStudentId) < 0) {
+      continue;
+    }
     if (endStudentId != null &&
-        studentId.compareTo(endStudentId) > 0) continue;
+        studentId.compareTo(endStudentId) > 0) {
+      continue;
+    }
 
     final hits = parsed['hits'] as int;
     final verified = parsed['verified'] as bool;
