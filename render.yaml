@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: ble-attendance-api
+    name: ble-attendance
     runtime: python
     rootDir: backend
     buildCommand: pip install -r requirements.txt && python scripts/seed_full.py

@@ -37,7 +37,7 @@ jobs:
       - name: Run backend regression suite
         run: python -m pytest backend/tests -q
         env:
-          PYTHONPATH: backend
+          PYTHONPATH: .:backend
 
   frontend:
     name: Frontend checks

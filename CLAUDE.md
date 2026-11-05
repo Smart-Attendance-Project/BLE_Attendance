@@ -63,7 +63,7 @@ BLE Attendance is a proximity-based lecture attendance platform designed for edu
    - Production mobile builds must strictly reject unencrypted `http://` API endpoints.
    - Android release manifests must specify `android:usesCleartextTraffic="false"`. Cleartext traffic is permitted solely in `src/debug/AndroidManifest.xml` for local development.
 2. **Canonical Host**:
-   - The documented production API URL is `https://ble-attendance-api.onrender.com`.
+   - The documented production API URL is `https://ble-attendance.onrender.com`.
 
 ---
 

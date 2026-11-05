@@ -12,11 +12,12 @@ from app.main import (
     batch_submit_attendance,
     get_active_session,
     login,
+    start_session,
     submit_detection_batch,
     teacher_today_schedule,
 )
 from app.models import Attendance, Detection, ScheduleSlot, Session as LectureSession
-from app.schemas import BatchDetectionIn, LoginRequest
+from app.schemas import BatchDetectionIn, LoginRequest, SessionCreateRequest
 from app.services import upsert_attendance
 from tests.conftest import make_session
 
@@ -423,3 +424,62 @@ def test_face_registration_prunes_expired_timestamps_and_allows_reregister(world
     assert res["face_registered"] is True
     # The 35-day-old timestamp was pruned; now contains 5-day-old + new timestamp
     assert len(student.face_reg_timestamps) == 2
+
+
+def test_stale_session_auto_closed_on_student_active_lookup(world, db):
+    # Session started 2.5 hours ago (stale > 2 hours)
+    session = make_session(db, world["lecture_assignment"], session_id="stale-session-1", minutes_old=150)
+    assert session.is_active is True
+
+    # Student queries active session — should get 404 because stale session is auto-closed
+    with pytest.raises(HTTPException) as exc:
+        get_active_session(db=db, current_user=world["in_range"])
+    assert exc.value.status_code == 404
+    assert "no active session" in exc.value.detail.lower()
+
+    # Verify session was marked inactive and ends_at set in DB
+    db.refresh(session)
+    assert session.is_active is False
+    assert session.ends_at is not None
+
+
+def test_stale_session_auto_closed_on_teacher_active_lookup(world, db):
+    session = make_session(db, world["lecture_assignment"], session_id="stale-session-2", minutes_old=150)
+    assert session.is_active is True
+
+    # Teacher queries active session — should get 404 because stale session is auto-closed
+    with pytest.raises(HTTPException) as exc:
+        get_active_session(db=db, current_user=world["teacher"])
+    assert exc.value.status_code == 404
+
+    db.refresh(session)
+    assert session.is_active is False
+    assert session.ends_at is not None
+
+
+def test_stale_session_does_not_block_new_session_creation(world, db):
+    # Stale session > 2 hours old left is_active=True
+    stale = make_session(db, world["lecture_assignment"], session_id="stale-session-3", minutes_old=180)
+    assert stale.is_active is True
+
+    # Teacher creates a new session — should succeed, auto-closing stale session instead of 409
+    new_sess = start_session(
+        SessionCreateRequest(subject="New Lecture", assignment_id=world["lecture_assignment"].id),
+        db=db,
+        teacher=world["teacher"],
+    )
+    assert new_sess.id != stale.id
+    assert new_sess.is_active is True
+
+    # Verify the stale session was closed
+    db.refresh(stale)
+    assert stale.is_active is False
+    assert stale.ends_at is not None
+
+
+def test_recent_active_session_is_returned_normally(world, db):
+    # Session started 30 minutes ago (< 2 hours, still active)
+    session = make_session(db, world["lecture_assignment"], session_id="recent-session-1", minutes_old=30)
+    res = get_active_session(db=db, current_user=world["in_range"])
+    assert res.id == session.id
+    assert res.is_active is True

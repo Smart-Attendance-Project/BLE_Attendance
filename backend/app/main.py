@@ -326,7 +326,13 @@ def start_session(payload: SessionCreateRequest, db: Session = Depends(get_db),
         and_(LectureSession.teacher_user_id == teacher.id, LectureSession.is_active.is_(True))
     ))
     if active:
-        raise HTTPException(status_code=409, detail="A session is already active")
+        now = datetime.utcnow()
+        if active.starts_at and (now - active.starts_at > timedelta(hours=2)):
+            active.is_active = False
+            active.ends_at = active.starts_at + timedelta(hours=2)
+            db.commit()
+        else:
+            raise HTTPException(status_code=409, detail="A session is already active")
     session = LectureSession(subject=payload.subject, teacher_user_id=teacher.id,
                              token=secrets.token_hex(8), assignment_id=payload.assignment_id)
     db.add(session)
@@ -369,6 +375,11 @@ def get_active_session(db: Session = Depends(get_db), current_user: User = Depen
     else:
         raise HTTPException(status_code=403, detail="Unsupported role")
     session = db.scalar(q.order_by(desc(LectureSession.starts_at)))
+    if session and session.starts_at and (datetime.utcnow() - session.starts_at > timedelta(hours=2)):
+        session.is_active = False
+        session.ends_at = session.starts_at + timedelta(hours=2)
+        db.commit()
+        session = None
     if session is None:
         raise HTTPException(status_code=404, detail="No active session")
     return _session_out(session)

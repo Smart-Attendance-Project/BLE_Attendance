@@ -40,7 +40,7 @@ final AdvertiseSettings kMaxRangeAdvertiseSettings = AdvertiseSettings(
 );
 const String kDefaultApiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
-  defaultValue: 'https://ble-attendance-api.onrender.com',
+  defaultValue: 'https://ble-attendance.onrender.com',
 );
 
 // ---------------------------------------------------------------------------
@@ -2095,11 +2095,10 @@ class _StudentPageState extends State<StudentPage>
   bool _advertising = false;
   bool _finalizationOpen = false;
   bool _blePermissionsGranted = true;
-  bool _serverSaidNoSession = false;
   String? _scanError;
   Timer? _scanRetryTimer;
-  Timer? _sessionPollTimer;
   Timer? _scanCycleTimer;
+  DateTime? _lastTeacherBeaconTime;
   BleStatus _bleStatus = BleStatus.unknown;
 
   // Debounced proximity
@@ -2124,7 +2123,6 @@ class _StudentPageState extends State<StudentPage>
     _watchBleStatus();
     _loadFaceRegistrationStatus();
     _bootstrap();
-    _startSessionPolling();
     // Prompt face setup after first frame if no face registered in DB
     if (widget.promptFaceSetup) {
       WidgetsBinding.instance.addPostFrameCallback(
@@ -2135,10 +2133,12 @@ class _StudentPageState extends State<StudentPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Re-check the active session immediately when the app comes back to
-    // foreground (handles overnight / next-day stale session state).
     if (state == AppLifecycleState.resumed) {
-      _loadActiveSession();
+      if (_bleStatus == BleStatus.ready &&
+          _blePermissionsGranted &&
+          !_scanning) {
+        _startScan();
+      }
     }
   }
 
@@ -2149,20 +2149,12 @@ class _StudentPageState extends State<StudentPage>
     _bleStatusSub?.cancel();
     _scanRetryTimer?.cancel();
     _scanCycleTimer?.cancel();
-    _sessionPollTimer?.cancel();
     _proximityDebounceTimer?.cancel();
     _blePeripheral.stop();
     FlutterForegroundTask.stopService();
     super.dispose();
   }
 
-  void _startSessionPolling() {
-    _sessionPollTimer?.cancel();
-    _sessionPollTimer = Timer.periodic(kStudentSessionPollInterval, (_) async {
-      if (!mounted) return;
-      await _loadActiveSession();
-    });
-  }
 
   void _watchBleStatus() {
     _bleStatusSub = _ble.statusStream.listen((status) {
@@ -2171,8 +2163,7 @@ class _StudentPageState extends State<StudentPage>
 
       if (status == BleStatus.ready &&
           _blePermissionsGranted &&
-          !_scanning &&
-          _sessionId != null) {
+          !_scanning) {
         _startScan();
         return;
       }
@@ -2246,74 +2237,15 @@ class _StudentPageState extends State<StudentPage>
     // Prompt to enable BT if needed
     await _ensureBluetoothEnabled();
 
-    await _loadActiveSession();
     _startScan();
     _startStudentAdvertising();
     _startForegroundService('BLE Attendance — scanning');
   }
 
   Future<void> _loadActiveSession() async {
-    // Try server first (may fail if offline — that's ok)
-    try {
-      final session = await widget.api.getActiveSession();
-      if (!mounted) return;
-      final wasOpen = _finalizationOpen;
-      final isOpen = (session['finalization_open'] as bool?) ?? false;
-      final newId = session['id'] as String;
-
-      // If the session changed (teacher ended and started a new one),
-      // reset local hit counters so stale data doesn't carry over.
-      if (_sessionId != null &&
-          _sessionId != newId &&
-          _sessionId != 'ble-detected') {
-        _totalBeaconReadings = 0;
-        _inRangeHits = 0;
-        _biometricDone = false;
-        _currentClassDivisionId = null;
-        _currentClassBatchId = null;
-        _proximityOk = null;
-        _rawProximityOk = null;
-        _updateStudentAdvertising();
-      }
-
-      _serverSaidNoSession = false;
-      setState(() {
-        _sessionId = newId;
-        _subject = session['subject'] as String?;
-        _teacherName = session['teacher_name'] as String?;
-        _finalizationOpen = isOpen;
-        _blePermissionsGranted = true;
-      });
-
-      if (isOpen && !wasOpen && !_meetsThreshold) {
-        _showNotEligibleDialog();
-      }
-    } catch (e) {
-      // If server returns 404 (no active session), clear local session state
-      // so the UI unfreezes (e.g. finalization button won't stay stuck).
-      if (e is DioException && e.response?.statusCode == 404) {
-        if ((_sessionId != null || _subject != null || _finalizationOpen) &&
-            mounted) {
-          _totalBeaconReadings = 0;
-          _inRangeHits = 0;
-          _biometricDone = false;
-          _proximityOk = null;
-          _rawProximityOk = null;
-          _updateStudentAdvertising();
-          _serverSaidNoSession = true;
-          setState(() {
-            _sessionId = null;
-            _subject = null;
-            _teacherName = null;
-            _currentClassDivisionId = null;
-            _currentClassBatchId = null;
-            _finalizationOpen = false;
-          });
-        }
-      }
-      // Other errors (offline etc.) — rely on BLE scan to detect teacher beacon
-      // Don't clear session ID if we already have one from BLE
-    }
+    // Students detect active lectures exclusively via BLE teacher packets.
+    // Server HTTP polling for active sessions is removed to ensure the UI
+    // never displays an active lecture when no teacher beacon is physically present.
   }
 
   void _showNotEligibleDialog() {
@@ -2444,6 +2376,8 @@ class _StudentPageState extends State<StudentPage>
                 }
               }
 
+              _lastTeacherBeaconTime = DateTime.now();
+
               // Debounce proximity changes
               _updateDebouncedProximity(ok);
 
@@ -2452,16 +2386,18 @@ class _StudentPageState extends State<StudentPage>
                   payload['finalizationOpen'] as bool? ?? false;
               if (bleFinalization && !_finalizationOpen) {
                 _finalizationOpen = true;
+                if (!_meetsThreshold) {
+                  _showNotEligibleDialog();
+                }
+              } else if (!bleFinalization && _finalizationOpen) {
+                _finalizationOpen = false;
               }
 
+              final beaconSubject = payload['subject'] as String?;
               setState(() {
-                // Only use BLE-detected session if the server hasn't
-                // explicitly said there's no session for this student.
-                if (!_serverSaidNoSession) {
-                  _sessionId ??= 'ble-detected';
-                  if (_subject == null && payload['subject'] != null) {
-                    _subject = payload['subject'] as String;
-                  }
+                _sessionId = 'ble-detected';
+                if (beaconSubject != null && beaconSubject.isNotEmpty) {
+                  _subject = beaconSubject;
                 }
               });
             }
@@ -2489,7 +2425,25 @@ class _StudentPageState extends State<StudentPage>
     // Periodically restart the scan every 7 seconds to bypass Android/ColorOS advertisement deduplication
     // (Minimum 6-7 seconds is required to avoid triggering Android's scan throttle: max 5 starts per 30 seconds)
     _scanCycleTimer = Timer.periodic(const Duration(seconds: 7), (_) {
-      if (mounted && _scanning && _bleStatus == BleStatus.ready) {
+      if (!mounted) return;
+
+      // Reset active session and proximity if teacher beacon hasn't been heard for > 20s
+      if (_lastTeacherBeaconTime != null &&
+          DateTime.now().difference(_lastTeacherBeaconTime!) >
+              const Duration(seconds: 20)) {
+        setState(() {
+          _lastTeacherBeaconTime = null;
+          _proximityOk = null;
+          _rawProximityOk = null;
+          _subject = null;
+          _teacherName = null;
+          _sessionId = null;
+          _finalizationOpen = false;
+        });
+        _updateStudentAdvertising();
+      }
+
+      if (_scanning && _bleStatus == BleStatus.ready) {
         setState(() {
           _scanning = false;
         });
@@ -2842,7 +2796,16 @@ class _StudentPageState extends State<StudentPage>
         ),
         actions: [
           IconButton(
-            onPressed: _loadActiveSession,
+            onPressed: () {
+              _loadFaceRegistrationStatus();
+              _startScan();
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Scanning for teacher beacon...'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            },
             icon: const Icon(Icons.refresh_rounded),
             tooltip: 'Refresh',
           ),
@@ -3152,7 +3115,14 @@ class ApiClient {
   Future<void> init() async {
     final saved = await _storage.read(key: 'api_base_url');
     if (saved != null && saved.trim().isNotEmpty) {
-      final normalized = _normalizeBaseUrl(saved);
+      var normalized = _normalizeBaseUrl(saved);
+      if (normalized.contains('ble-attendance-api.onrender.com')) {
+        normalized = normalized.replaceAll(
+          'ble-attendance-api.onrender.com',
+          'ble-attendance.onrender.com',
+        );
+        await _storage.write(key: 'api_base_url', value: normalized);
+      }
       _baseUrl = normalized;
       _dio.options.baseUrl = normalized;
     }
