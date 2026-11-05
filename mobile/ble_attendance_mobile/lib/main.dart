@@ -2083,7 +2083,6 @@ class _StudentPageState extends State<StudentPage>
   StreamSubscription<DiscoveredDevice>? _scanSub;
   StreamSubscription<BleStatus>? _bleStatusSub;
 
-  String? _sessionId;
   String? _subject;
   String? _teacherName;
   List<int> _studentDivisionIds = [];
@@ -2242,12 +2241,6 @@ class _StudentPageState extends State<StudentPage>
     _startForegroundService('BLE Attendance — scanning');
   }
 
-  Future<void> _loadActiveSession() async {
-    // Students detect active lectures exclusively via BLE teacher packets.
-    // Server HTTP polling for active sessions is removed to ensure the UI
-    // never displays an active lecture when no teacher beacon is physically present.
-  }
-
   void _showNotEligibleDialog() {
     showDialog(
       context: context,
@@ -2395,7 +2388,6 @@ class _StudentPageState extends State<StudentPage>
 
               final beaconSubject = payload['subject'] as String?;
               setState(() {
-                _sessionId = 'ble-detected';
                 if (beaconSubject != null && beaconSubject.isNotEmpty) {
                   _subject = beaconSubject;
                 }
@@ -2437,7 +2429,6 @@ class _StudentPageState extends State<StudentPage>
           _rawProximityOk = null;
           _subject = null;
           _teacherName = null;
-          _sessionId = null;
           _finalizationOpen = false;
         });
         _updateStudentAdvertising();

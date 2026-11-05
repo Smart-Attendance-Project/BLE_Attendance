@@ -15,7 +15,6 @@ import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const String kTeacherServiceUuid = '0000180D-0000-1000-8000-00805F9B34FB';
-const String kStudentServiceUuid = '0000181C-0000-1000-8000-00805F9B34FB';
 const int kManufacturerId = 0x004C;
 
 // ---------------------------------------------------------------------------
