@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
 
-import 'offline_attendance_exporter.dart';
 
 enum AttendanceFilter { all, present, absent }
 
 /// Page displaying detailed student records for an offline session with
-/// filtering (All, Present, Absent) and XML export.
+/// filtering (All, Present, Absent).
 class OfflineAttendanceDetailsPage extends StatefulWidget {
   final Map<String, dynamic> session;
   final Future<void> Function(Map<String, dynamic> session)? onUpload;
@@ -24,7 +23,6 @@ class OfflineAttendanceDetailsPage extends StatefulWidget {
 class _OfflineAttendanceDetailsPageState
     extends State<OfflineAttendanceDetailsPage> {
   AttendanceFilter _filter = AttendanceFilter.all;
-  bool _exporting = false;
   bool _uploading = false;
 
   List<Map<String, dynamic>> get _allStudents {
@@ -67,67 +65,6 @@ class _OfflineAttendanceDetailsPageState
     return raw;
   }
 
-  Future<void> _exportXml() async {
-    setState(() => _exporting = true);
-    try {
-      final exportedFile =
-          await OfflineAttendanceExporter.exportAttendanceXml(widget.session);
-      if (!mounted) return;
-
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          icon: const Icon(Icons.check_circle_outline,
-              color: Colors.green, size: 48),
-          title: const Text('Export Successful'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'XML file has been saved in the BLE_Attendance folder on your device:',
-                style: TextStyle(fontSize: 13),
-              ),
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade100,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.grey.shade300),
-                ),
-                child: SelectableText(
-                  exportedFile.path,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Dismiss'),
-            ),
-          ],
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to export XML: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _exporting = false);
-    }
-  }
-
   Future<void> _handleUpload() async {
     if (widget.onUpload == null) return;
     setState(() => _uploading = true);
@@ -167,44 +104,6 @@ class _OfflineAttendanceDetailsPageState
         backgroundColor: cs.primary,
         foregroundColor: Colors.white,
         elevation: 0,
-        actions: [
-          // Export button at the top
-          IconButton(
-            icon: _exporting
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
-                : const Icon(Icons.file_download_outlined),
-            tooltip: 'Export XML to Phone',
-            onPressed: _exporting ? null : _exportXml,
-          ),
-          // Top right filter menu
-          PopupMenuButton<AttendanceFilter>(
-            icon: const Icon(Icons.filter_list_rounded),
-            tooltip: 'Filter Students',
-            initialValue: _filter,
-            onSelected: (val) => setState(() => _filter = val),
-            itemBuilder: (ctx) => const [
-              PopupMenuItem(
-                value: AttendanceFilter.all,
-                child: Text('All Students'),
-              ),
-              PopupMenuItem(
-                value: AttendanceFilter.present,
-                child: Text('Present Only'),
-              ),
-              PopupMenuItem(
-                value: AttendanceFilter.absent,
-                child: Text('Absent Only'),
-              ),
-            ],
-          ),
-        ],
       ),
       body: Column(
         children: [
