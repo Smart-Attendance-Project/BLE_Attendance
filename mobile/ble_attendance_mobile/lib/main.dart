@@ -554,8 +554,6 @@ class _TeacherPageState extends State<TeacherPage>
         setState(() {
           _todaySlots = slots;
           _lastScheduleFetchDate = today;
-          // If the selected slot is from a previous day it will no longer
-          // appear in the new list — clear the stale selection.
           if (_selectedSlot != null &&
               !slots.any(
                 (s) => s['slot_id'] == _selectedSlot!['slot_id'],
@@ -564,7 +562,26 @@ class _TeacherPageState extends State<TeacherPage>
           }
         });
       }
-    } catch (_) {}
+      await _storage.write(
+        key: 'cached_teacher_today_slots',
+        value: jsonEncode(slots),
+      );
+    } catch (_) {
+      if (_todaySlots.isEmpty) {
+        try {
+          final cachedStr = await _storage.read(key: 'cached_teacher_today_slots');
+          if (cachedStr != null && cachedStr.isNotEmpty) {
+            final decoded = jsonDecode(cachedStr) as List;
+            final cachedSlots = decoded.cast<Map<String, dynamic>>();
+            if (mounted) {
+              setState(() {
+                _todaySlots = cachedSlots;
+              });
+            }
+          }
+        } catch (_) {}
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -734,6 +751,26 @@ class _TeacherPageState extends State<TeacherPage>
 
   // ---------------------------------------------------------------------------
 
+  Map<String, String> _generateStudentRoster(String? startId, String? endId) {
+    if (startId == null || endId == null) return {};
+    final matchStart = RegExp(r'^([A-Za-z0-9_-]+?)(\d+)$').firstMatch(startId);
+    final matchEnd = RegExp(r'^([A-Za-z0-9_-]+?)(\d+)$').firstMatch(endId);
+    if (matchStart == null || matchEnd == null) return {};
+    final prefixStart = matchStart.group(1);
+    final prefixEnd = matchEnd.group(1);
+    if (prefixStart != prefixEnd) return {};
+    final startNum = int.tryParse(matchStart.group(2)!);
+    final endNum = int.tryParse(matchEnd.group(2)!);
+    if (startNum == null || endNum == null || startNum > endNum) return {};
+    final padLen = matchStart.group(2)!.length;
+    final Map<String, String> roster = {};
+    for (int i = startNum; i <= endNum; i++) {
+      final id = '$prefixStart' + i.toString().padLeft(padLen, '0');
+      roster[id] = 'Student ' + id;
+    }
+    return roster;
+  }
+
   Future<void> _startSession() async {
     if (_selectedSlot == null) {
       ScaffoldMessenger.of(
@@ -768,7 +805,10 @@ class _TeacherPageState extends State<TeacherPage>
       _activeSubjectCode = _selectedSlot!['subject_code'] as String?;
       _studentTallies.clear();
       _verifiedStudents.clear();
-      _studentNames = {};
+      _studentNames = _generateStudentRoster(
+        _activeDivisionStartStudentId,
+        _activeDivisionEndStudentId,
+      );
       _isAdvertising = true;
 
       // 2. Start local BLE scanning, foreground task, and advertising right away
@@ -1158,6 +1198,13 @@ class _TeacherPageState extends State<TeacherPage>
     final resolvedSessionId = sessionId ?? 'offline-${DateTime.now().millisecondsSinceEpoch}';
     setState(() => _loading = true);
     try {
+      if (_studentNames.isEmpty) {
+        _studentNames = _generateStudentRoster(
+          _activeDivisionStartStudentId,
+          _activeDivisionEndStudentId,
+        );
+      }
+
       final decisions = _studentTallies.values
           .map(
             (t) => {
@@ -1190,35 +1237,36 @@ class _TeacherPageState extends State<TeacherPage>
       }
 
       bool attendanceSubmitted = false;
-      if (decisions.isNotEmpty) {
-        if (_serverSessionCreated && !resolvedSessionId.startsWith('offline-')) {
-          try {
-            await widget.api.batchSubmitAttendance(resolvedSessionId, decisions);
-            attendanceSubmitted = true;
-          } catch (submitError) {
-            // Save locally
-            await _savePendingAttendance(
-              sessionId: resolvedSessionId,
-              assignmentId: assignmentId,
-              subject: _activeSubjectName ?? 'Lecture',
-              decisions: decisions,
-              totalHits: _globalTotalHits,
-            );
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    'Network error — attendance saved locally. '
-                    'Tap "Upload Pending" to retry when online.',
-                  ),
-                  duration: Duration(seconds: 5),
-                  backgroundColor: Colors.orange,
-                ),
-              );
-            }
-          }
-        } else {
-          // Session run completely offline — save with assignment ID for later upload
+      final bool isOfflineSession =
+          !_serverSessionCreated || resolvedSessionId.startsWith('offline-');
+
+      if (isOfflineSession) {
+        // ALWAYS save offline session locally, even if decisions is empty!
+        await _savePendingAttendance(
+          sessionId: resolvedSessionId,
+          assignmentId: assignmentId,
+          subject: _activeSubjectName ?? 'Lecture',
+          decisions: decisions,
+          totalHits: _globalTotalHits,
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Session ended offline. Attendance saved locally. '
+                'Tap "Upload Pending" to upload when online.',
+              ),
+              duration: Duration(seconds: 5),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      } else if (decisions.isNotEmpty) {
+        try {
+          await widget.api.batchSubmitAttendance(resolvedSessionId, decisions);
+          attendanceSubmitted = true;
+        } catch (submitError) {
+          // Network error while submitting — save locally
           await _savePendingAttendance(
             sessionId: resolvedSessionId,
             assignmentId: assignmentId,
@@ -1230,8 +1278,8 @@ class _TeacherPageState extends State<TeacherPage>
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
                 content: Text(
-                  'Session ended offline. Attendance saved locally. '
-                  'Tap "Upload Pending" to upload when online.',
+                  'Network error — attendance saved locally. '
+                  'Tap "Upload Pending" to retry when online.',
                 ),
                 duration: Duration(seconds: 5),
                 backgroundColor: Colors.orange,
