@@ -18,7 +18,7 @@ from app.main import (
 )
 from app.models import Attendance, Detection, ScheduleSlot, Session as LectureSession
 from app.schemas import BatchDetectionIn, LoginRequest, SessionCreateRequest
-from app.services import upsert_attendance
+from app.services import record_student_observation
 from tests.conftest import make_session
 
 
@@ -237,7 +237,7 @@ def test_summary_counts_only_proximity_valid_detections(world, db):
     assert record.is_present is True
 
 
-def test_attendance_requires_biometric_verification(world, db):
+def test_student_observations_require_teacher_review(world, db):
     session = make_session(db, world["lecture_assignment"], minutes_old=5)
     for _ in range(8):
         db.add(Detection(
@@ -248,16 +248,17 @@ def test_attendance_requires_biometric_verification(world, db):
         ))
     db.commit()
 
-    attendance = upsert_attendance(
-        db, session.id, world["in_range"].id, biometric_verified=False
+    attendance = record_student_observation(
+        db, session.id, world["in_range"].id, biometric_reported=False
     )
     assert attendance.presence_ratio == 0.8
     assert attendance.is_present is False
 
-    attendance = upsert_attendance(
-        db, session.id, world["in_range"].id, biometric_verified=True
+    attendance = record_student_observation(
+        db, session.id, world["in_range"].id, biometric_reported=True
     )
-    assert attendance.is_present is True
+    assert attendance.biometric_verified is True
+    assert attendance.is_present is False
     assert attendance.finalized_at is not None
 
 
