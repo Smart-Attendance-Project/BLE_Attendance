@@ -74,6 +74,7 @@ export interface AttendanceSummary {
   total_students: number;
   present_students: number;
   records: AttendanceRecord[];
+  attendance_review_required?: boolean;
 }
 
 export interface AdminTeacher {

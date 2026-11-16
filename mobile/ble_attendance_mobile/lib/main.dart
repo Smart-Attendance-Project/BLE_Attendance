@@ -1095,7 +1095,7 @@ class _TeacherPageState extends State<TeacherPage>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '${unverifiedPresent.length} student(s) are present but have not completed face verification:',
+                '${unverifiedPresent.length} student(s) meet the BLE threshold and have no face report:',
                 style: const TextStyle(fontSize: 14),
               ),
               const SizedBox(height: 12),
@@ -1156,7 +1156,7 @@ class _TeacherPageState extends State<TeacherPage>
             'End Session',
             style: TextStyle(fontWeight: FontWeight.w700),
           ),
-          content: const Text('Do you want to end the session?'),
+          content: const Text('End the session and send BLE observations for attendance review?'),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -2665,7 +2665,7 @@ class _StudentPageState extends State<StudentPage>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('✅ Face verified — your presence is recorded'),
+          content: Text('Face check complete. Your teacher confirms attendance after class.'),
           backgroundColor: Color(0xFF16A34A),
           duration: Duration(seconds: 4),
         ),
@@ -3033,7 +3033,7 @@ class _StudentPageState extends State<StudentPage>
               ),
               label: Text(
                 _biometricDone
-                    ? 'Attendance Verified ✅'
+                    ? 'Face check complete'
                     : 'Finalize Attendance (Face Scan)',
               ),
             ),
