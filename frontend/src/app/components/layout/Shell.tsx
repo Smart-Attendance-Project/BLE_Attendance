@@ -66,12 +66,25 @@ export function Shell({
   role: Role;
   current: NavKey;
   onNavigate: (key: NavKey) => void;
-  onLogout: () => void;
+  onLogout: () => Promise<void>;
   userName: string;
   isSuperAdmin?: boolean;
   children: React.ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [logoutError, setLogoutError] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+  async function handleLogout() {
+    setLogoutError(false);
+    setSigningOut(true);
+    try {
+      await onLogout();
+    } catch {
+      setLogoutError(true);
+    } finally {
+      setSigningOut(false);
+    }
+  }
   const nav = role === "teacher" ? teacherNav : adminNav;
   const allItems: NavItem[] = [...nav, { key: "password", label: "Password", icon: KeyRound }];
 
@@ -130,7 +143,8 @@ export function Shell({
                   <KeyRound className="size-4" /> Change password
                 </button>
                 <button
-                  onClick={onLogout}
+                  onClick={handleLogout}
+                  disabled={signingOut}
                   className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm text-muted-foreground hover:bg-error/10 hover:text-red-600"
                 >
                   <LogOut className="size-4" /> Sign out
@@ -170,7 +184,8 @@ export function Shell({
                 );
               })}
               <button
-                onClick={onLogout}
+                onClick={handleLogout}
+                disabled={signingOut}
                 className="mt-1 flex items-center gap-3 rounded-lg border-t border-border px-3 py-2.5 pt-3 text-left text-sm text-muted-foreground"
               >
                 <LogOut className="size-[18px]" /> Sign out
@@ -181,7 +196,10 @@ export function Shell({
       </header>
 
       <main>
-        <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-10 lg:px-8">{children}</div>
+        <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
+          {logoutError && <p role="alert" className="mb-4 text-red-600">Sign out failed. Try again.</p>}
+          {children}
+        </div>
       </main>
     </div>
   );

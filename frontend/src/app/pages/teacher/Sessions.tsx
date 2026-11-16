@@ -149,9 +149,12 @@ export function Sessions() {
                     <td className="px-6 py-4 text-sm text-muted-foreground">{r.detection_count}</td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
-                        <div className="h-1.5 w-[100px] rounded bg-slate-100">
-                          <div className="h-full rounded bg-primary" style={{ width: `${Math.round(r.presence_ratio * 100)}%` }} />
-                        </div>
+                        <progress
+                          aria-label="Presence ratio"
+                          className="presence-progress h-1.5 w-[100px] rounded bg-slate-100"
+                          value={r.presence_ratio}
+                          max={1}
+                        />
                         <span className="tabular-nums text-xs text-muted-foreground">{Math.round(r.presence_ratio * 100)}%</span>
                       </div>
                     </td>

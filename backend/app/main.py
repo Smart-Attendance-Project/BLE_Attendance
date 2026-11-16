@@ -14,7 +14,7 @@ def _now_ist() -> datetime:
 def _is_set(val) -> bool:
     return val is not None and not hasattr(val, "default")
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy import inspect, text, and_, desc, func, select
@@ -23,8 +23,10 @@ from sqlalchemy.orm import Session, joinedload
 from app.auth import (
     authenticate_user, create_access_token, get_current_user,
     hash_password, require_role, require_admin, require_super_admin,
-    verify_password,
+    verify_password, browser_cookie_name, create_browser_session,
+    require_web_origin, revoke_browser_session,
 )
+from app.config import settings
 from app.database import Base, engine, get_db
 from app.models import (
     Attendance, Batch, Branch, Detection, Division, DivisionStudent,
@@ -46,11 +48,18 @@ app = FastAPI(title="BLE Attendance API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=settings.allowed_web_origins,
+    allow_methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+@app.middleware("http")
+async def prevent_browser_session_caching(request: Request, call_next):
+    response = await call_next(request)
+    if browser_cookie_name() in request.cookies or request.url.path.startswith("/auth/web/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
 
 STUDENT_ID_PATTERN = re.compile(r"^(?:\d{2}[A-Z]{2,5}\d{3}|D\d{2}[A-Z]{2,5}\d{3})$")
 
@@ -158,6 +167,19 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     return TokenResponse(access_token=token, role=user.role,
                          full_name=user.full_name, user_id=user.id,
                          division_ids=div_ids, enrollments=enrollments)
+
+
+@app.post("/auth/web/login", status_code=204, dependencies=[Depends(require_web_origin)])
+def browser_login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
+    user = authenticate_user(db, payload.identifier, payload.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    create_browser_session(db, user, request, response)
+
+
+@app.post("/auth/web/logout", status_code=204, dependencies=[Depends(require_web_origin)])
+def browser_logout(request: Request, response: Response, db: Session = Depends(get_db)):
+    revoke_browser_session(db, request, response)
 
 
 @app.get("/auth/me", response_model=UserOut)

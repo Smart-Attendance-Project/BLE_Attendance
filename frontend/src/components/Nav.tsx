@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from './AuthContext'
 import { useQueryClient } from '@tanstack/react-query'
@@ -8,7 +9,15 @@ export function Nav() {
   const nav = useNavigate()
   const loc = useLocation()
   const qc = useQueryClient()
-  const handleLogout = () => { logout(); nav('/login') }
+  const [logoutError, setLogoutError] = useState(false)
+  const handleLogout = async () => {
+    try {
+      await logout()
+      nav('/login')
+    } catch {
+      setLogoutError(true)
+    }
+  }
   const handleRefresh = () => qc.invalidateQueries()
 
   const link = (to: string, label: string, Icon: React.ElementType) => {
@@ -48,6 +57,7 @@ export function Nav() {
         {user.is_super_admin && link('/admin/admins', 'Admins', ShieldCheck)}
       </>}
 
+      {logoutError && <p role="alert" className="text-red-300">Sign out failed. Try again.</p>}
       {user && (
         <div className="ml-auto flex items-center gap-3">
           <span className="text-white/50 text-sm hidden sm:block">{user.full_name}</span>

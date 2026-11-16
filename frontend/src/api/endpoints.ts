@@ -2,7 +2,9 @@ import api from './client'
 
 // Auth
 export const login = (identifier: string, password: string) =>
-  api.post('/auth/login', { identifier, password }).then(r => r.data)
+  api.post('/auth/web/login', { identifier, password })
+
+export const logout = () => api.post('/auth/web/logout')
 
 export const getMe = () => api.get('/auth/me').then(r => r.data)
 

@@ -37,8 +37,14 @@ PYTHONPATH=. python backend/scripts/seed_full.py
 1. https://vercel.com → New Project → Import from GitHub
 2. Select `Smart-Attendance-Project/BLE_Attendance`
 3. **Root Directory**: `frontend`
-4. Add env var: `VITE_API_BASE_URL` = `https://ble-attendance.onrender.com`
-5. Deploy. Done.
+4. Set `WEB_ORIGINS` on the Render service to a JSON array of exact HTTPS frontend origins, for example `["https://attendance.example.com"]`. List each deployed frontend that should accept browser logins and omit trailing slashes. The production default is an empty allow-list.
+5. Deploy the backend with `APP_ENV=production` and deploy the frontend. Vercel's `/api` rewrite forwards to the canonical Render host in `frontend/vercel.json`. Remove the obsolete frontend `VITE_API_BASE_URL` setting. A frontend deployed against a separate staging backend needs a matching rewrite target and its exact origin allow-listed on that backend.
+
+The dashboard sends web authentication and API requests to its own origin. The proxy forwards the original `Origin` and `X-BLE-Web` headers for write validation. The backend creates the `browser_sessions` table at startup, stores only hashed session IDs, and issues 30-minute, Secure, HttpOnly, SameSite=Strict cookies. Signing out deletes the session from the database. The mobile app keeps its existing bearer-token flow.
+
+Local Vite development proxies `/api` to `http://localhost:8000`. Run it at `http://localhost:5173` or `http://127.0.0.1:5173` with the backend in `APP_ENV=dev` for local HTTP cookies. If you use another local port, add its origin to `WEB_ORIGINS` explicitly.
+
+After deployment, check that `/api/health` returns the API health response and the frontend sends its security headers. Sign in, reload the dashboard, then sign out and verify `/api/auth/me` returns 401. Use your browser console to check for CSP violations while navigating the dashboard.
 
 ---
 
