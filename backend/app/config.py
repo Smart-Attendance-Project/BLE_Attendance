@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-this-in-production"
     jwt_algorithm: str = "HS256"
     jwt_exp_minutes: int = 60 * 8
+    security_audit_ip_enabled: bool = False
 
     model_config = SettingsConfigDict(
         env_file=str(Path(__file__).resolve().parents[1] / ".env"),

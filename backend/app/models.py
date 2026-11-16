@@ -3,8 +3,8 @@ from enum import Enum
 from uuid import uuid4
 
 from sqlalchemy import (
-    Boolean, Date, DateTime, Enum as SqlEnum, Float, ForeignKey,
-    Index, Integer, JSON, String, Time, UniqueConstraint,
+    Boolean, Date, DateTime, DDL, Enum as SqlEnum, Float, ForeignKey,
+    Index, Integer, JSON, String, Time, UniqueConstraint, event, func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -207,4 +207,62 @@ class Attendance(Base):
     __table_args__ = (
         UniqueConstraint("session_id", "student_user_id", name="uq_attendance_session_student"),
         Index("idx_attendance_session", "session_id"),
+    )
+
+
+class ApiRateBucket(Base):
+    """A fixed-window quota shared by all API workers."""
+    __tablename__ = "api_rate_buckets"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    count: Mapped[int] = mapped_column(Integer)
+    quota: Mapped[int] = mapped_column(Integer)
+    window_end: Mapped[int] = mapped_column(Integer, index=True)
+
+
+class AuditEvent(Base):
+    __tablename__ = "security_audit_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    request_id: Mapped[str] = mapped_column(String(32), index=True)
+    actor_id: Mapped[str | None] = mapped_column(String(36))
+    actor_role: Mapped[str | None] = mapped_column(String(16))
+    action: Mapped[str] = mapped_column(String(40))
+    target_id: Mapped[str] = mapped_column(String(64), index=True)
+    session_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    outcome: Mapped[str] = mapped_column(String(12))
+    network_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    details: Mapped[dict] = mapped_column(JSON)
+
+    __table_args__ = (Index("idx_audit_action_time", "action", "occurred_at"),)
+
+
+event.listen(
+    AuditEvent.__table__, "after_create",
+    DDL("""
+        CREATE OR REPLACE FUNCTION reject_security_audit_change()
+        RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            RAISE EXCEPTION 'Security audit events are append-only';
+        END;
+        $$;
+    """).execute_if(dialect="postgresql"),
+)
+event.listen(
+    AuditEvent.__table__, "after_create",
+    DDL("""
+        CREATE TRIGGER security_audit_append_only
+        BEFORE UPDATE OR DELETE OR TRUNCATE ON security_audit_events
+        FOR EACH STATEMENT EXECUTE FUNCTION reject_security_audit_change();
+    """).execute_if(dialect="postgresql"),
+)
+for operation in ("UPDATE", "DELETE"):
+    event.listen(
+        AuditEvent.__table__, "after_create",
+        DDL(f"""
+            CREATE TRIGGER security_audit_no_{operation.lower()}
+            BEFORE {operation} ON security_audit_events
+            BEGIN SELECT RAISE(ABORT, 'Security audit events are append-only'); END;
+        """).execute_if(dialect="sqlite"),
     )
