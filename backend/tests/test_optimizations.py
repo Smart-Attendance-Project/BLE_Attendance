@@ -1,5 +1,6 @@
 import io
 from datetime import datetime, date, timedelta
+import pytest
 from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -13,7 +14,10 @@ from app.main import (
     _build_summary, batch_submit_attendance, teacher_today_schedule,
     teacher_today_slots_mobile, export_attendance_range, list_slots,
     list_assignments, list_divisions, _now_ist,
+    end_session, finalize_attendance, lock_attendance, override_attendance,
 )
+
+from app.schemas import AttendanceFinalizeIn, AttendanceOverrideIn
 
 
 def setup_db():
@@ -160,6 +164,8 @@ def test_optimizations():
         token="token456",
         starts_at=datetime.utcnow(),
         is_active=True,
+        finalization_open=True,
+        attendance_review_required=True,
     )
     db.add(sess_active)
     db.commit()
@@ -173,10 +179,47 @@ def test_optimizations():
     assert "attendance records saved" in res["message"]
     # Verify records created in DB
     att1 = db.query(Attendance).filter_by(session_id=sess_active.id, student_user_id="student-1").first()
-    assert att1 is not None and att1.is_present is True
+    assert att1 is not None and not att1.is_present and not att1.overridden_by_teacher
+    assert att1.presence_ratio == 1.0
     att3 = db.query(Attendance).filter_by(session_id=sess_active.id, student_user_id="student-3").first()
     assert att3 is not None and att3.is_present is False
     print("✓ batch_submit_attendance passed!")
+
+    student = students[0]
+    observation = AttendanceFinalizeIn(session_id=sess_active.id, biometric_verified=True)
+    report = finalize_attendance(observation, db=db, student=student)
+    assert report.biometric_verified and not report.is_present
+    assert _build_summary(db, sess_active).present_students == 0
+
+    override_attendance(sess_active.id, AttendanceOverrideIn(
+        student_user_id=student.id, is_present=True, reason="Verified class roll call",
+    ), db=db, teacher=teacher)
+    assert finalize_attendance(observation, db=db, student=student).is_present
+
+    end_session(sess_active.id, db=db, teacher=teacher)
+    with pytest.raises(HTTPException, match="review all students") as locked_early:
+        lock_attendance(sess_active.id, db=db, teacher=teacher)
+    assert locked_early.value.status_code == 409
+
+    with pytest.raises(HTTPException, match="Review and lock attendance") as exported_early:
+        export_attendance_range(
+            assignment.id, date.today().isoformat(), date.today().isoformat(), db=db, teacher=teacher,
+        )
+    assert exported_early.value.status_code == 409
+
+    for enrolled in students[1:]:
+        override_attendance(sess_active.id, AttendanceOverrideIn(
+            student_user_id=enrolled.id, is_present=enrolled.id == student.id, reason="Verified class roll call",
+        ), db=db, teacher=teacher)
+
+    batch_submit_attendance(sess_active.id, [
+        {"student_id": student.student_id, "is_present": False},
+    ], db=db, teacher=teacher)
+    assert _build_summary(db, sess_active).present_students == 1
+    assert lock_attendance(sess_active.id, db=db, teacher=teacher)["message"] == "Attendance locked"
+    with pytest.raises(HTTPException) as response:
+        batch_submit_attendance(sess_active.id, payload, db=db, teacher=teacher)
+    assert response.value.status_code == 409
 
     print("--- Testing teacher_today_schedule ---")
     today_slots = teacher_today_schedule(db=db, teacher=teacher)

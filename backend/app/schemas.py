@@ -64,6 +64,7 @@ class SessionOut(BaseModel):
     is_active: bool
     finalization_open: bool
     attendance_locked: bool = False
+    attendance_review_required: bool = False
     start_student_id: Optional[str] = None
     end_student_id: Optional[str] = None
     division_id: Optional[int] = None
@@ -130,6 +131,7 @@ class SessionAttendanceSummary(BaseModel):
     total_students: int
     present_students: int
     records: list[AttendanceStudentSummary]
+    attendance_review_required: bool = False
 
 
 # ── Admin: Semester ───────────────────────────────────────────────────────────

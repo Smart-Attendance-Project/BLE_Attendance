@@ -48,8 +48,9 @@ export function Export() {
       a.download = `attendance_${fromDate}_to_${toDate}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch {
-      setErr("Export failed. No sessions may exist for this range.");
+    } catch (error) {
+      const status = (error as { response?: { status?: number } }).response?.status;
+      setErr(status === 409 ? "Review and lock every session in this date range before exporting." : "Export failed.");
     } finally {
       setLoading(false);
     }

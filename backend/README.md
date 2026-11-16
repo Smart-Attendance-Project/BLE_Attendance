@@ -76,3 +76,11 @@ Demo logins:
 
 This backend assumes the mobile app follows the agreed prototype behavior:
 student app is opened before class and not force-closed until session ends.
+
+## Teacher-reviewed attendance
+
+For new sessions and unlocked sessions active at migration time, BLE and face
+check reports are prototype observations. They cannot confirm attendance.
+End the session, independently verify each student in the web Sessions view,
+mark them present or absent, and lock the session before exporting. Attendance
+recorded in earlier closed or locked sessions is preserved.

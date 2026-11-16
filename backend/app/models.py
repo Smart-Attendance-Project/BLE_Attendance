@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     Boolean, Date, DateTime, Enum as SqlEnum, Float, ForeignKey,
-    Index, Integer, JSON, String, Time, UniqueConstraint,
+    Index, Integer, JSON, String, Time, UniqueConstraint, false,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -163,6 +163,7 @@ class Session(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     finalization_open: Mapped[bool] = mapped_column(Boolean, default=False)
     attendance_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    attendance_review_required: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
     detections: Mapped[list["Detection"]] = relationship(back_populates="session")
     assignment: Mapped["TeacherAssignment | None"] = relationship()

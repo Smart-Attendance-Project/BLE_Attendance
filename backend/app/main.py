@@ -40,7 +40,7 @@ from app.schemas import (
     SemesterIn, SemesterOut, SessionAttendanceSummary, SessionCreateRequest,
     SessionOut, SubjectIn, SubjectOut, TokenResponse, UserOut,
 )
-from app.services import compute_presence_ratio, upsert_attendance
+from app.services import record_student_observation
 
 app = FastAPI(title="BLE Attendance API")
 
@@ -81,6 +81,19 @@ def _run_migrations(engine):
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN assignment_id INTEGER REFERENCES teacher_assignments(id)"))
             if "attendance_locked" not in cols:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN attendance_locked BOOLEAN DEFAULT FALSE"))
+            if "attendance_review_required" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE sessions ADD COLUMN attendance_review_required BOOLEAN NOT NULL DEFAULT FALSE"
+                ))
+                conn.execute(text(
+                    "UPDATE sessions SET attendance_review_required = TRUE "
+                    "WHERE is_active AND NOT COALESCE(attendance_locked, FALSE)"
+                ))
+                conn.execute(text(
+                    "UPDATE attendance SET is_present = FALSE, overridden_by_teacher = FALSE, override_reason = NULL "
+                    "WHERE session_id IN (SELECT id FROM sessions WHERE attendance_review_required) "
+                    "AND (NOT COALESCE(overridden_by_teacher, FALSE) OR override_reason = 'BLE batch submit')"
+                ))
         if "users" in tables:
             cols = {c["name"] for c in inspector.get_columns("users")}
             if "admin_id" not in cols:
@@ -334,7 +347,8 @@ def start_session(payload: SessionCreateRequest, db: Session = Depends(get_db),
         else:
             raise HTTPException(status_code=409, detail="A session is already active")
     session = LectureSession(subject=payload.subject, teacher_user_id=teacher.id,
-                             token=secrets.token_hex(8), assignment_id=payload.assignment_id)
+                             token=secrets.token_hex(8), assignment_id=payload.assignment_id,
+                             attendance_review_required=True)
     db.add(session)
     db.commit()
     db.refresh(session)
@@ -344,7 +358,7 @@ def start_session(payload: SessionCreateRequest, db: Session = Depends(get_db),
 @app.post("/sessions/{session_id}/end", response_model=SessionOut)
 def end_session(session_id: str, db: Session = Depends(get_db),
                 teacher: User = Depends(require_role(UserRole.teacher))):
-    session = _get_own_session(db, session_id, teacher.id)
+    session = _get_own_session(db, session_id, teacher.id, for_update=True)
     session.is_active = False
     session.finalization_open = False
     session.ends_at = datetime.utcnow()
@@ -388,7 +402,7 @@ def get_active_session(db: Session = Depends(get_db), current_user: User = Depen
 @app.post("/teacher/sessions/{session_id}/open-finalization", response_model=SessionOut)
 def open_finalization(session_id: str, db: Session = Depends(get_db),
                       teacher: User = Depends(require_role(UserRole.teacher))):
-    session = _get_own_session(db, session_id, teacher.id)
+    session = _get_own_session(db, session_id, teacher.id, for_update=True)
     if not session.is_active:
         raise HTTPException(status_code=409, detail="Session already ended")
     session.finalization_open = True
@@ -447,15 +461,14 @@ def submit_detection_batch(payload: BatchDetectionIn, db: Session = Depends(get_
 @app.post("/attendance/finalize", response_model=AttendanceOut)
 def finalize_attendance(payload: AttendanceFinalizeIn, db: Session = Depends(get_db),
                         student: User = Depends(require_role(UserRole.student))):
-    session = db.get(LectureSession, payload.session_id)
+    session = db.get(LectureSession, payload.session_id, with_for_update=True)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     if not _student_is_in_session(db, student.id, session):
         raise HTTPException(status_code=403, detail="Student is not enrolled in this class")
-    if not session.finalization_open:
+    if session.attendance_locked or not session.attendance_review_required or not session.finalization_open:
         raise HTTPException(status_code=409, detail="Finalization not open")
-    att = upsert_attendance(db=db, session_id=payload.session_id,
-                            student_user_id=student.id, biometric_verified=payload.biometric_verified)
+    att = record_student_observation(db, session.id, student.id, payload.biometric_verified)
     return AttendanceOut(session_id=att.session_id, student_user_id=att.student_user_id,
                          presence_ratio=att.presence_ratio, is_present=att.is_present,
                          biometric_verified=att.biometric_verified)
@@ -474,7 +487,7 @@ def get_attendance_summary(session_id: str, db: Session = Depends(get_db),
 def override_attendance(session_id: str, payload: AttendanceOverrideIn,
                         db: Session = Depends(get_db),
                         teacher: User = Depends(require_role(UserRole.teacher))):
-    session = _get_own_session(db, session_id, teacher.id)
+    session = _get_own_session(db, session_id, teacher.id, for_update=True)
     if session.attendance_locked:
         raise HTTPException(status_code=409, detail="Attendance is locked")
     student = db.get(User, payload.student_user_id)
@@ -502,7 +515,11 @@ def override_attendance(session_id: str, payload: AttendanceOverrideIn,
 @app.post("/teacher/sessions/{session_id}/lock")
 def lock_attendance(session_id: str, db: Session = Depends(get_db),
                     teacher: User = Depends(require_role(UserRole.teacher))):
-    session = _get_own_session(db, session_id, teacher.id)
+    session = _get_own_session(db, session_id, teacher.id, for_update=True)
+    if session.attendance_review_required and (
+        session.is_active or any(not row.overridden_by_teacher for row in _build_summary(db, session).records)
+    ):
+        raise HTTPException(status_code=409, detail="End the session and review all students before locking")
     session.attendance_locked = True
     db.commit()
     return {"message": "Attendance locked"}
@@ -629,6 +646,9 @@ def export_attendance_range(
             )
         ).order_by(LectureSession.starts_at)
     ).scalars().all()
+
+    if any(s.attendance_review_required and not s.attendance_locked for s in sessions):
+        raise HTTPException(status_code=409, detail="Review and lock attendance for every session in the export range")
 
     # Get all students in this division (and batch if lab)
     q = select(User).join(DivisionStudent, DivisionStudent.student_user_id == User.id).where(
@@ -1039,7 +1059,7 @@ def assign_student_to_division(payload: DivisionStudentIn, db: Session = Depends
 @app.post("/admin/sessions/{session_id}/attendance/override", response_model=AttendanceOut)
 def admin_override_attendance(session_id: str, payload: AttendanceOverrideIn,
                                db: Session = Depends(get_db), _: User = Depends(require_admin)):
-    session = db.get(LectureSession, session_id)
+    session = db.get(LectureSession, session_id, with_for_update=True)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     if session.attendance_locked:
@@ -1073,17 +1093,17 @@ def batch_submit_attendance(
     db: Session = Depends(get_db),
     teacher: User = Depends(require_role(UserRole.teacher)),
 ):
-    """Teacher phone submits final P/A list in one call at session end."""
-    session = _get_own_session(db, session_id, teacher.id)
+    """Store the teacher phone's BLE observations for subsequent manual review."""
+    session = _get_own_session(db, session_id, teacher.id, for_update=True)
     if session.attendance_locked:
         raise HTTPException(status_code=409, detail="Attendance is locked")
 
-    student_ids = [item["student_id"] for item in payload if isinstance(item, dict) and "student_id" in item]
+    student_ids = [item["student_id"] for item in payload if isinstance(item.get("student_id"), str)]
     if not student_ids:
         return {"message": "0 attendance records saved"}
 
     # 1. Fetch all matching students in one query
-    students = db.execute(select(User).where(User.student_id.in_(student_ids))).scalars().all()
+    students = db.execute(select(User).where(User.student_id.in_(student_ids), User.role == UserRole.student)).scalars().all()
     user_map = {u.student_id: u for u in students}
 
     # 2. Check enrollment in one query
@@ -1106,10 +1126,10 @@ def batch_submit_attendance(
     updated = 0
     for item in payload:
         s_id = item.get("student_id")
-        user = user_map.get(s_id)
-        if not user:
+        if not isinstance(s_id, str):
             continue
-        if assignment and user.id not in enrolled_user_ids:
+        user = user_map.get(s_id)
+        if not user or (assignment and user.id not in enrolled_user_ids):
             continue
 
         att = existing_att.get(user.id)
@@ -1121,11 +1141,12 @@ def batch_submit_attendance(
             db.add(att)
             existing_att[user.id] = att
 
-        is_pres = bool(item.get("is_present", False))
-        att.is_present = is_pres
-        att.presence_ratio = 1.0 if is_pres else 0.0
-        att.overridden_by_teacher = True
-        att.override_reason = "BLE batch submit"
+        if session.attendance_review_required and not att.overridden_by_teacher:
+            hits, total = item.get("hits"), item.get("total")
+            if type(hits) is int and type(total) is int and 0 <= hits <= total and total > 0:
+                att.presence_ratio = round(hits / total, 3)
+            else:
+                att.presence_ratio = 1.0 if item.get("is_present") is True else 0.0
         updated += 1
 
     db.commit()
@@ -1180,17 +1201,20 @@ def teacher_today_slots_mobile(db: Session = Depends(get_db),
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _get_own_session(db, session_id, teacher_id):
-    session = db.execute(
+def _get_own_session(db, session_id, teacher_id, *, for_update=False):
+    query = (
         select(LectureSession)
         .options(
             joinedload(LectureSession.assignment).joinedload(TeacherAssignment.subject),
             joinedload(LectureSession.assignment).joinedload(TeacherAssignment.division),
             joinedload(LectureSession.assignment).joinedload(TeacherAssignment.batch),
         )
-        .where(LectureSession.id == session_id)
-    ).scalars().first()
-    if not session or session.teacher_user_id != teacher_id:
+        .where(LectureSession.id == session_id, LectureSession.teacher_user_id == teacher_id)
+    )
+    if for_update:
+        query = query.with_for_update(of=LectureSession)
+    session = db.scalars(query).first()
+    if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
 
@@ -1229,6 +1253,7 @@ def _session_out(s: LectureSession) -> SessionOut:
                       starts_at=s.starts_at, ends_at=s.ends_at, is_active=s.is_active,
                       finalization_open=s.finalization_open,
                       attendance_locked=s.attendance_locked or False,
+                      attendance_review_required=s.attendance_review_required,
                       start_student_id=start_student_id,
                       end_student_id=end_student_id,
                       division_id=division_id,
@@ -1304,6 +1329,7 @@ def _build_summary(db, session: LectureSession) -> SessionAttendanceSummary:
             session_id=session.id, subject=session.subject,
             starts_at=session.starts_at, ends_at=session.ends_at,
             total_students=0, present_students=0, records=[],
+            attendance_review_required=session.attendance_review_required,
         )
 
     # Pre-calculate 30-second elapsed windows once
@@ -1347,8 +1373,9 @@ def _build_summary(db, session: LectureSession) -> SessionAttendanceSummary:
             if overridden:
                 # Teacher manually set the status – respect it
                 ratio, is_present = att.presence_ratio, att.is_present
+            elif session.attendance_review_required:
+                ratio, is_present = max(ratio, att.presence_ratio or 0.0), False
             else:
-                # Both BLE proximity AND biometric are required
                 is_present = (ratio >= 0.75) and bio
 
         if is_present:
@@ -1363,4 +1390,5 @@ def _build_summary(db, session: LectureSession) -> SessionAttendanceSummary:
     return SessionAttendanceSummary(session_id=session.id, subject=session.subject,
                                     starts_at=session.starts_at, ends_at=session.ends_at,
                                     total_students=len(records), present_students=present,
-                                    records=records)
+                                    records=records,
+                                    attendance_review_required=session.attendance_review_required)

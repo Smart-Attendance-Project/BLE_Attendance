@@ -60,7 +60,15 @@ export function Sessions() {
   });
 
   const summaryData = summary as AttendanceSummary | undefined;
-  const editable = selectedSessionData ? selectedSessionData.is_active || selectedSessionData.finalization_open : false;
+  const reviewRequired = summaryData?.attendance_review_required ?? false;
+  const pendingCount = reviewRequired
+    ? summaryData?.records.filter((record) => !record.overridden_by_teacher).length ?? 0
+    : 0;
+  const editable = !!selectedSessionData && !selectedSessionData.attendance_locked &&
+    (reviewRequired || selectedSessionData.is_active || selectedSessionData.finalization_open);
+  const canLock = editable && (reviewRequired
+    ? !selectedSessionData?.is_active && pendingCount === 0
+    : selectedSessionData?.is_active);
 
   const overrideMut = useMutation({
     mutationFn: ({ studentId, isPresent }: { studentId: string; isPresent: boolean }) =>
@@ -95,7 +103,7 @@ export function Sessions() {
           actions={
             <div className="flex items-center gap-2">
               {selectedSessionData?.attendance_locked ? <StatusChip tone="locked">Locked</StatusChip> : editable ? <StatusChip tone="editable">Editable</StatusChip> : <StatusChip tone="ended">Closed</StatusChip>}
-              {!selectedSessionData?.attendance_locked && selectedSessionData?.is_active && (
+              {canLock && (
                 <Button variant="outline" className="rounded-lg" onClick={() => lockMut.mutate()}>
                   <Lock className="size-4" /> Lock attendance
                 </Button>
@@ -111,6 +119,11 @@ export function Sessions() {
           <Panel><p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Status</p><p className="text-3xl font-semibold text-foreground">{selectedSessionData?.is_active ? "Active" : selectedSessionData?.attendance_locked ? "Locked" : "Ended"}</p></Panel>
         </div>
 
+        {reviewRequired && pendingCount > 0 && (
+          <p className="mb-4 text-sm text-muted-foreground">
+            {pendingCount} students await review. Verify attendance independently before marking each student present or absent, then lock the session to enable export.
+          </p>
+        )}
         {editable && (
           <div className="mb-4 max-w-md">
             <input
@@ -129,9 +142,9 @@ export function Sessions() {
                 <tr className="bg-slate-50 border-b border-slate-200">
                   <th className="px-6 py-4 text-[10px] font-bold text-primary uppercase tracking-widest">Student</th>
                   <th className="px-6 py-4 text-[10px] font-bold text-primary uppercase tracking-widest">Batch</th>
-                  <th className="px-6 py-4 text-[10px] font-bold text-primary uppercase tracking-widest">Detections</th>
+                  <th className="px-6 py-4 text-[10px] font-bold text-primary uppercase tracking-widest">{reviewRequired ? 'Reported detections' : 'Detections'}</th>
                   <th className="px-6 py-4 text-[10px] font-bold text-primary uppercase tracking-widest">Ratio</th>
-                  <th className="px-6 py-4 text-[10px] font-bold text-primary uppercase tracking-widest">Biometric</th>
+                  <th className="px-6 py-4 text-[10px] font-bold text-primary uppercase tracking-widest">{reviewRequired ? 'Reported face match' : 'Biometric'}</th>
                   <th className="px-6 py-4 text-[10px] font-bold text-primary uppercase tracking-widest text-center">Status</th>
                   <th className="px-6 py-4 text-[10px] font-bold text-primary uppercase tracking-widest text-right">Override</th>
                 </tr>
@@ -157,24 +170,33 @@ export function Sessions() {
                     </td>
                     <td className="px-6 py-4">
                       {r.biometric_verified ? (
-                        <span className="inline-flex items-center gap-1 text-sm text-emerald-600"><Fingerprint className="size-4" /> Verified</span>
+                        <span className="inline-flex items-center gap-1 text-sm text-emerald-600"><Fingerprint className="size-4" /> {reviewRequired ? 'Reported' : 'Verified'}</span>
                       ) : (
                         <span className="text-sm text-muted-foreground/40">—</span>
                       )}
                     </td>
                     <td className="px-6 py-4 text-center">
-                      <StatusChip tone={r.is_present ? "present" : "absent"}>{r.is_present ? "Present" : "Absent"}</StatusChip>
+                      {reviewRequired && !r.overridden_by_teacher ? (
+                        <StatusChip tone="editable">Pending review</StatusChip>
+                      ) : (
+                        <StatusChip tone={r.is_present ? "present" : "absent"}>{r.is_present ? "Present" : "Absent"}</StatusChip>
+                      )}
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <Button
-                        variant={r.is_present ? "outline" : "default"}
-                        size="sm"
-                        disabled={!editable}
-                        className="rounded-lg"
-                        onClick={() => overrideMut.mutate({ studentId: r.student_user_id, isPresent: !r.is_present })}
-                      >
-                        Mark {r.is_present ? "Absent" : "Present"}
-                      </Button>
+                      <div className="flex justify-end gap-2">
+                        {(reviewRequired || !r.is_present) && (
+                          <Button size="sm" disabled={!editable || overrideMut.isPending}
+                            onClick={() => overrideMut.mutate({ studentId: r.student_user_id, isPresent: true })}>
+                            Mark Present
+                          </Button>
+                        )}
+                        {(reviewRequired || r.is_present) && (
+                          <Button size="sm" variant="outline" disabled={!editable || overrideMut.isPending}
+                            onClick={() => overrideMut.mutate({ studentId: r.student_user_id, isPresent: false })}>
+                            Mark Absent
+                          </Button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
