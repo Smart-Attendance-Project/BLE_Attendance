@@ -1,5 +1,4 @@
 @import "tailwindcss";
-@import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@300;400;500;600;700&display=swap');
 
 @theme inline {
   --font-sans: "Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
@@ -96,4 +95,19 @@
     letter-spacing: -0.01em;
     font-weight: 700;
   }
+}
+
+.presence-progress::-webkit-progress-bar {
+  background-color: var(--color-surface-2);
+  border-radius: 9999px;
+}
+
+.presence-progress::-webkit-progress-value {
+  background-color: var(--color-primary);
+  border-radius: 9999px;
+}
+
+.presence-progress::-moz-progress-bar {
+  background-color: var(--color-primary);
+  border-radius: 9999px;
 }

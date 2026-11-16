@@ -34,6 +34,14 @@ class User(Base):
     face_reg_timestamps: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
+class BrowserSession(Base):
+    __tablename__ = "browser_sessions"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class Semester(Base):
     __tablename__ = "semesters"
 

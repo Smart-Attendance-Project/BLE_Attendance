@@ -1,9 +1,10 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { login as apiLogin, getMe } from '../api/endpoints'
+import { SESSION_EXPIRED } from '../api/client'
+import { login as apiLogin, logout as apiLogout, getMe } from '../api/endpoints'
 
 interface AuthUser { id: string; full_name: string; role: string; is_super_admin: boolean }
-interface AuthCtx { user: AuthUser | null; loading: boolean; login: (id: string, pw: string) => Promise<void>; logout: () => void }
+interface AuthCtx { user: AuthUser | null; loading: boolean; login: (id: string, pw: string) => Promise<void>; logout: () => Promise<void> }
 
 const Ctx = createContext<AuthCtx>(null!)
 export const useAuth = () => useContext(Ctx)
@@ -14,24 +15,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const qc = useQueryClient()
 
   useEffect(() => {
-    const token = localStorage.getItem('token')
-    if (token) {
-      getMe().then(setUser).catch(() => localStorage.clear()).finally(() => setLoading(false))
-    } else {
-      setLoading(false)
+    let active = true
+    const onExpire = () => {
+      setUser(null)
+      qc.clear()
     }
-  }, [])
+    try {
+      // Discard any token left behind by the previous frontend.
+      localStorage.removeItem('token')
+    } catch {
+      // Web sessions do not require access to browser storage.
+    }
+    window.addEventListener(SESSION_EXPIRED, onExpire)
+    getMe()
+      .then(me => { if (active) setUser(me) })
+      .catch(() => { if (active) setUser(null) })
+      .finally(() => { if (active) setLoading(false) })
+    return () => {
+      active = false
+      window.removeEventListener(SESSION_EXPIRED, onExpire)
+    }
+  }, [qc])
 
   const login = async (identifier: string, password: string) => {
-    const data = await apiLogin(identifier, password)
-    localStorage.setItem('token', data.access_token)
+    await apiLogin(identifier, password)
     const me = await getMe()
     setUser(me)
     qc.clear()
   }
 
-  const logout = () => {
-    localStorage.clear()
+  const logout = async () => {
+    await apiLogout()
     setUser(null)
     qc.clear()
   }

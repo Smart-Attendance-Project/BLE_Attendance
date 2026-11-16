@@ -1,18 +1,21 @@
+import secrets
+from hashlib import sha256
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
-from app.models import User, UserRole
+from app.models import BrowserSession, User, UserRole
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
+BROWSER_SESSION_SECONDS = 30 * 60
 
 
 def hash_password(raw_password: str) -> str:
@@ -43,12 +46,79 @@ def authenticate_user(db: Session, identifier: str, password: str) -> User | Non
     return user
 
 
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
+def browser_cookie_name() -> str:
+    return "ble_session" if settings.app_env == "dev" else "__Host-ble_session"
+
+
+def require_web_origin(request: Request) -> None:
+    if (
+        request.headers.get("Origin") not in settings.allowed_web_origins
+        or request.headers.get("X-BLE-Web") != "1"
+    ):
+        raise HTTPException(status_code=403, detail="Browser request origin not allowed")
+
+
+def _session_hash(cookie: str) -> str:
+    return sha256(cookie.encode()).hexdigest()
+
+
+def _remove_browser_session(db: Session, request: Request) -> None:
+    cookie = request.cookies.get(browser_cookie_name())
+    if cookie:
+        db.execute(delete(BrowserSession).where(BrowserSession.token_hash == _session_hash(cookie)))
+
+
+def create_browser_session(db: Session, user: User, request: Request, response: Response) -> None:
+    now = datetime.now(timezone.utc)
+    cookie = secrets.token_urlsafe(32)
+    _remove_browser_session(db, request)
+    db.execute(delete(BrowserSession).where(BrowserSession.expires_at <= now))
+    db.add(BrowserSession(
+        token_hash=_session_hash(cookie),
+        user_id=user.id,
+        expires_at=now + timedelta(seconds=BROWSER_SESSION_SECONDS),
+    ))
+    db.commit()
+    response.set_cookie(
+        browser_cookie_name(), cookie, max_age=BROWSER_SESSION_SECONDS,
+        secure=settings.app_env != "dev", httponly=True, samesite="strict",
+    )
+
+
+def revoke_browser_session(db: Session, request: Request, response: Response) -> None:
+    _remove_browser_session(db, request)
+    db.commit()
+    response.delete_cookie(
+        browser_cookie_name(), secure=settings.app_env != "dev", httponly=True, samesite="strict",
+    )
+
+
+def get_current_user(
+    request: Request,
+    token: str | None = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> User:
     credentials_error = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    if token is None:
+        cookie = request.cookies.get(browser_cookie_name())
+        if not cookie or "authorization" in request.headers:
+            raise credentials_error
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            require_web_origin(request)
+        user = db.scalar(
+            select(User).join(BrowserSession, BrowserSession.user_id == User.id).where(
+                BrowserSession.token_hash == _session_hash(cookie),
+                BrowserSession.expires_at > datetime.now(timezone.utc),
+            )
+        )
+        if user is None:
+            raise credentials_error
+        return user
+
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
         user_id = payload.get("sub")

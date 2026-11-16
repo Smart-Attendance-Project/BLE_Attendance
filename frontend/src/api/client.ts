@@ -1,26 +1,20 @@
 import axios from 'axios'
 
-// In production (Vercel), VITE_API_BASE_URL points to Render backend.
-// In dev, /api is proxied to localhost:8000 via vite.config.ts.
-const baseURL = import.meta.env.VITE_API_BASE_URL ?? '/api'
+export const SESSION_EXPIRED = 'attendance:session-expired'
 
-const api = axios.create({ baseURL })
-
-api.interceptors.request.use(cfg => {
-  const token = localStorage.getItem('token')
-  if (token) cfg.headers.Authorization = `Bearer ${token}`
-  return cfg
+const api = axios.create({
+  baseURL: '/api',
+  headers: { 'X-BLE-Web': '1' },
 })
 
 api.interceptors.response.use(
-  r => r,
-  err => {
-    if (err.response?.status === 401) {
-      localStorage.clear()
-      window.location.href = '/login'
+  response => response,
+  error => {
+    if (error.response?.status === 401 && error.config?.url !== '/auth/web/login') {
+      window.dispatchEvent(new Event(SESSION_EXPIRED))
     }
-    return Promise.reject(err)
-  }
+    return Promise.reject(error)
+  },
 )
 
 export default api
