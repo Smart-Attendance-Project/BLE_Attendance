@@ -86,7 +86,7 @@ class BatchDetectionItem(BaseModel):
 
 
 class BatchDetectionIn(BaseModel):
-    detections: list[BatchDetectionItem]
+    detections: list[BatchDetectionItem] = Field(max_length=200)
 
 
 # ── Attendance ────────────────────────────────────────────────────────────────

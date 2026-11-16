@@ -765,8 +765,8 @@ class _TeacherPageState extends State<TeacherPage>
     final padLen = matchStart.group(2)!.length;
     final Map<String, String> roster = {};
     for (int i = startNum; i <= endNum; i++) {
-      final id = '$prefixStart' + i.toString().padLeft(padLen, '0');
-      roster[id] = 'Student ' + id;
+      final id = '$prefixStart${i.toString().padLeft(padLen, '0')}';
+      roster[id] = 'Student $id';
     }
     return roster;
   }

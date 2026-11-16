@@ -1,6 +1,7 @@
 import io
 import secrets
 import math
+from collections import Counter
 from datetime import datetime, date, timezone, timedelta
 import re
 
@@ -14,12 +15,16 @@ def _now_ist() -> datetime:
 def _is_set(val) -> bool:
     return val is not None and not hasattr(val, "default")
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy import inspect, text, and_, desc, func, select
 from sqlalchemy.orm import Session, joinedload
 
+from app.abuse import (
+    Limit, SecurityRequestMiddleware, audit_event, audit_override, audit_request_id,
+    enforce_limits, limit_detections, limit_login, login_target,
+)
 from app.auth import (
     authenticate_user, create_access_token, get_current_user,
     hash_password, require_role, require_admin, require_super_admin,
@@ -43,6 +48,7 @@ from app.schemas import (
 from app.services import compute_presence_ratio, upsert_attendance
 
 app = FastAPI(title="BLE Attendance API")
+app.add_middleware(SecurityRequestMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -136,10 +142,15 @@ def register_user(payload: RegisterRequest, db: Session = Depends(get_db)):
 
 
 @app.post("/auth/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+def login(payload: LoginRequest, db: Session = Depends(get_db), request: Request = None):
+    limit_login(db, request, payload.identifier)
     user = authenticate_user(db, payload.identifier, payload.password)
+    target = login_target(payload.identifier)
     if user is None:
+        audit_event(db, request, "login", target_id=target, outcome="denied")
+        db.commit()
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    audit_event(db, request, "login", target_id=target, actor=user)
     token = create_access_token(subject=user.id)
     # For students, include their enrolled division IDs so the mobile app
     # can filter BLE beacons locally without further server calls.
@@ -155,9 +166,12 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
             {"division_id": division_id, "batch_id": batch_id}
             for division_id, batch_id in rows
         ]
-    return TokenResponse(access_token=token, role=user.role,
-                         full_name=user.full_name, user_id=user.id,
-                         division_ids=div_ids, enrollments=enrollments)
+    result = TokenResponse(
+        access_token=token, role=user.role, full_name=user.full_name, user_id=user.id,
+        division_ids=div_ids, enrollments=enrollments,
+    )
+    db.commit()
+    return result
 
 
 @app.get("/auth/me", response_model=UserOut)
@@ -234,10 +248,14 @@ def register_face(
     payload: dict,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    request: Request = None,
 ):
     """Save face embedding to DB. Called on first registration."""
+    enforce_limits(db, Limit(("face-register", user.id), 6, 600))
     embedding = payload.get("embedding")
     if not embedding or not isinstance(embedding, list):
+        audit_event(db, request, "face.register", target_id=user.id, actor=user, outcome="denied")
+        db.commit()
         raise HTTPException(status_code=422, detail="embedding must be a list of floats")
 
     from sqlalchemy.orm.attributes import flag_modified
@@ -249,18 +267,27 @@ def register_face(
     user.face_reg_timestamps = updated_timestamps
     flag_modified(user, "face_reg_timestamps")
     flag_modified(user, "face_embedding")
+    audit_event(db, request, "face.register", target_id=user.id, actor=user)
     db.commit()
     return {"message": "Face registered", "face_registered": True}
 
 
 @app.get("/auth/face-profile")
 def get_face_profile(
+    db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    request: Request = None,
 ):
     """Return saved face embedding for syncing to device."""
-    if not user.face_embedding:
+    enforce_limits(db, Limit(("face-read", user.id), 30, 60))
+    embedding = user.face_embedding
+    audit_event(
+        db, request, "face.read", target_id=user.id, actor=user, outcome="allowed" if embedding else "missing",
+    )
+    db.commit()
+    if not embedding:
         raise HTTPException(status_code=404, detail="No face profile registered")
-    return {"embedding": user.face_embedding, "face_registered": True}
+    return {"embedding": embedding, "face_registered": True}
 
 
 @app.post("/auth/re-register-face")
@@ -268,10 +295,14 @@ def re_register_face(
     payload: dict,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    request: Request = None,
 ):
     """Re-register face. Verifies similarity against the primary embedding and appends it."""
+    enforce_limits(db, Limit(("face-register", user.id), 6, 600))
     embedding = payload.get("embedding")
     if not embedding or not isinstance(embedding, list):
+        audit_event(db, request, "face.re-register", target_id=user.id, actor=user, outcome="denied")
+        db.commit()
         raise HTTPException(status_code=422, detail="embedding must be a list of floats")
 
     from sqlalchemy.orm.attributes import flag_modified
@@ -288,11 +319,15 @@ def re_register_face(
 
         primary = existing_list[0]
         if len(primary) != len(embedding):
+            audit_event(db, request, "face.re-register", target_id=user.id, actor=user, outcome="denied")
+            db.commit()
             raise HTTPException(status_code=422, detail="Invalid embedding dimensions")
         
         dist = math.sqrt(sum((a - b) ** 2 for a, b in zip(primary, embedding)))
         # 0.85 matches defaultThreshold in face_recognizer.dart
         if dist >= 0.85:
+            audit_event(db, request, "face.re-register", target_id=user.id, actor=user, outcome="denied")
+            db.commit()
             raise HTTPException(
                 status_code=400,
                 detail="Face does not match original profile."
@@ -308,6 +343,7 @@ def re_register_face(
 
     user.face_reg_timestamps = updated_timestamps
     flag_modified(user, "face_reg_timestamps")
+    audit_event(db, request, "face.re-register", target_id=user.id, actor=user)
     db.commit()
     return {"message": "Face re-registered", "face_registered": True}
 
@@ -402,6 +438,7 @@ def open_finalization(session_id: str, db: Session = Depends(get_db),
 @app.post("/detections")
 def submit_detection(payload: DetectionIn, db: Session = Depends(get_db),
                      student: User = Depends(require_role(UserRole.student))):
+    limit_detections(db, student.id, Counter({payload.session_id: 1}), batch=False)
     session = db.get(LectureSession, payload.session_id)
     if session is None or not session.is_active:
         raise HTTPException(status_code=404, detail="Active session not found")
@@ -416,6 +453,8 @@ def submit_detection(payload: DetectionIn, db: Session = Depends(get_db),
 @app.post("/detections/batch")
 def submit_detection_batch(payload: BatchDetectionIn, db: Session = Depends(get_db),
                            teacher: User = Depends(require_role(UserRole.teacher))):
+    session_counts = Counter(item.session_id for item in payload.detections)
+    limit_detections(db, teacher.id, session_counts, batch=True)
     recorded = 0
     for item in payload.detections:
         session = db.get(LectureSession, item.session_id)
@@ -446,14 +485,21 @@ def submit_detection_batch(payload: BatchDetectionIn, db: Session = Depends(get_
 
 @app.post("/attendance/finalize", response_model=AttendanceOut)
 def finalize_attendance(payload: AttendanceFinalizeIn, db: Session = Depends(get_db),
-                        student: User = Depends(require_role(UserRole.student))):
-    session = db.get(LectureSession, payload.session_id)
+                        student: User = Depends(require_role(UserRole.student)), request: Request = None):
+    enforce_limits(
+        db, Limit(("finalize-account", student.id), 12, 60),
+        Limit(("finalize-session", student.id, payload.session_id), 4, 60),
+    )
+    session = db.get(LectureSession, payload.session_id, with_for_update=True)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     if not _student_is_in_session(db, student.id, session):
         raise HTTPException(status_code=403, detail="Student is not enrolled in this class")
     if not session.finalization_open:
         raise HTTPException(status_code=409, detail="Finalization not open")
+    audit_event(
+        db, request, "attendance.finalize", target_id=student.id, actor=student, session_id=payload.session_id,
+    )
     att = upsert_attendance(db=db, session_id=payload.session_id,
                             student_user_id=student.id, biometric_verified=payload.biometric_verified)
     return AttendanceOut(session_id=att.session_id, student_user_id=att.student_user_id,
@@ -473,8 +519,8 @@ def get_attendance_summary(session_id: str, db: Session = Depends(get_db),
 @app.post("/teacher/sessions/{session_id}/attendance/override", response_model=AttendanceOut)
 def override_attendance(session_id: str, payload: AttendanceOverrideIn,
                         db: Session = Depends(get_db),
-                        teacher: User = Depends(require_role(UserRole.teacher))):
-    session = _get_own_session(db, session_id, teacher.id)
+                        teacher: User = Depends(require_role(UserRole.teacher)), request: Request = None):
+    session = _get_own_session(db, session_id, teacher.id, lock=True)
     if session.attendance_locked:
         raise HTTPException(status_code=409, detail="Attendance is locked")
     student = db.get(User, payload.student_user_id)
@@ -485,6 +531,9 @@ def override_attendance(session_id: str, payload: AttendanceOverrideIn,
     att = db.scalar(select(Attendance).where(
         and_(Attendance.session_id == session_id, Attendance.student_user_id == payload.student_user_id)
     ))
+    audit_override(
+        db, request, teacher, session_id, student.id, att.is_present if att else None, payload.is_present, payload.reason,
+    )
     if att is None:
         att = Attendance(session_id=session_id, student_user_id=payload.student_user_id,
                          presence_ratio=0.0, biometric_verified=False)
@@ -501,8 +550,12 @@ def override_attendance(session_id: str, payload: AttendanceOverrideIn,
 
 @app.post("/teacher/sessions/{session_id}/lock")
 def lock_attendance(session_id: str, db: Session = Depends(get_db),
-                    teacher: User = Depends(require_role(UserRole.teacher))):
-    session = _get_own_session(db, session_id, teacher.id)
+                    teacher: User = Depends(require_role(UserRole.teacher)), request: Request = None):
+    session = _get_own_session(db, session_id, teacher.id, lock=True)
+    audit_event(
+        db, request, "attendance.lock", target_id=session_id, actor=teacher, session_id=session_id,
+        details={"was_locked": bool(session.attendance_locked)},
+    )
     session.attendance_locked = True
     db.commit()
     return {"message": "Attendance locked"}
@@ -1038,8 +1091,9 @@ def assign_student_to_division(payload: DivisionStudentIn, db: Session = Depends
 
 @app.post("/admin/sessions/{session_id}/attendance/override", response_model=AttendanceOut)
 def admin_override_attendance(session_id: str, payload: AttendanceOverrideIn,
-                               db: Session = Depends(get_db), _: User = Depends(require_admin)):
-    session = db.get(LectureSession, session_id)
+                               db: Session = Depends(get_db), admin: User = Depends(require_admin),
+                               request: Request = None):
+    session = db.get(LectureSession, session_id, with_for_update=True)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     if session.attendance_locked:
@@ -1052,6 +1106,9 @@ def admin_override_attendance(session_id: str, payload: AttendanceOverrideIn,
     att = db.scalar(select(Attendance).where(
         and_(Attendance.session_id == session_id, Attendance.student_user_id == payload.student_user_id)
     ))
+    audit_override(
+        db, request, admin, session_id, student.id, att.is_present if att else None, payload.is_present, payload.reason,
+    )
     if att is None:
         att = Attendance(session_id=session_id, student_user_id=payload.student_user_id,
                          presence_ratio=0.0, biometric_verified=False)
@@ -1072,9 +1129,10 @@ def batch_submit_attendance(
     payload: list[dict],
     db: Session = Depends(get_db),
     teacher: User = Depends(require_role(UserRole.teacher)),
+    request: Request = None,
 ):
     """Teacher phone submits final P/A list in one call at session end."""
-    session = _get_own_session(db, session_id, teacher.id)
+    session = _get_own_session(db, session_id, teacher.id, lock=True)
     if session.attendance_locked:
         raise HTTPException(status_code=409, detail="Attendance is locked")
 
@@ -1104,6 +1162,7 @@ def batch_submit_attendance(
     }
 
     updated = 0
+    request_id = audit_request_id(request)
     for item in payload:
         s_id = item.get("student_id")
         user = user_map.get(s_id)
@@ -1113,6 +1172,11 @@ def batch_submit_attendance(
             continue
 
         att = existing_att.get(user.id)
+        is_pres = bool(item.get("is_present", False))
+        audit_override(
+            db, request, teacher, session_id, user.id, att.is_present if att else None, is_pres, "BLE batch submit",
+            request_id=request_id,
+        )
         if att is None:
             att = Attendance(
                 session_id=session_id, student_user_id=user.id,
@@ -1121,7 +1185,6 @@ def batch_submit_attendance(
             db.add(att)
             existing_att[user.id] = att
 
-        is_pres = bool(item.get("is_present", False))
         att.is_present = is_pres
         att.presence_ratio = 1.0 if is_pres else 0.0
         att.overridden_by_teacher = True
@@ -1180,17 +1243,20 @@ def teacher_today_slots_mobile(db: Session = Depends(get_db),
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _get_own_session(db, session_id, teacher_id):
-    session = db.execute(
+def _get_own_session(db, session_id, teacher_id, *, lock=False):
+    query = (
         select(LectureSession)
         .options(
             joinedload(LectureSession.assignment).joinedload(TeacherAssignment.subject),
             joinedload(LectureSession.assignment).joinedload(TeacherAssignment.division),
             joinedload(LectureSession.assignment).joinedload(TeacherAssignment.batch),
         )
-        .where(LectureSession.id == session_id)
-    ).scalars().first()
-    if not session or session.teacher_user_id != teacher_id:
+        .where(LectureSession.id == session_id, LectureSession.teacher_user_id == teacher_id)
+    )
+    if lock:
+        query = query.with_for_update(of=LectureSession)
+    session = db.scalars(query).first()
+    if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
 
