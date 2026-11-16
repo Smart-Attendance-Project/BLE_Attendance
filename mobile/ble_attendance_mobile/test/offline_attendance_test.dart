@@ -111,8 +111,13 @@ void main() {
       expect(find.text('25CE001'), findsNothing);
       expect(find.text('25CE003'), findsNothing);
 
-      // Verify Export button is present in AppBar
-      expect(find.byIcon(Icons.file_download_outlined), findsOneWidget);
+      await tester.tap(find.text('All (3)'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('25CE001'), findsOneWidget);
+      expect(find.text('25CE002'), findsOneWidget);
+      expect(find.text('25CE003'), findsOneWidget);
+      expect(find.byIcon(Icons.file_download_outlined), findsNothing);
     });
   });
 }
